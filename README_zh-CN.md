@@ -3,7 +3,7 @@
   <a title="简体中文" href="README_zh-CN.md"><img src="https://img.shields.io/badge/-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-A31F34?style=for-the-badge" alt="简体中文"></a>
 </div>
 
-# ✔[UptimeFlare](https://github.com/lyc8503/UptimeFlare)
+# UptimeFlare Distributed
 
 本分支新增独立 Go 探针、持久化结果与压缩批量上传，以及可展开的多探针汇总。请参阅[外部探针配置与部署](docs/external-probes.md)。
 

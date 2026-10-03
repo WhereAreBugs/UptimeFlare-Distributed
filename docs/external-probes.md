@@ -35,13 +35,13 @@ monitors: [
 
 令牌长度 24–512 字符，不允许空白或重复。可用 `openssl rand -hex 32` 生成。不要把真实令牌提交到源码。身份由令牌映射，不接受客户端任意指定探针 ID；上传目标必须属于该身份的 `probes` 分配。
 
-使用原 GitHub Actions/Terraform 部署流程时，在仓库 Secrets 新增 `PROBE_TOKENS`。部署流程将其作为敏感变量注入 Worker 与 Pages production 的 secret binding。不要把生产令牌注入预览环境；Terraform state 也需保密。直接部署时，可以在 Cloudflare Dashboard 设置 Worker 和 Pages 对应的 secret 后部署；若之后使用 Terraform 管理，改用 `TF_VAR_probe_tokens` 保持配置所有权一致。
+本分布式版本通过 `.github/workflows/deploy.yml` 自动部署：向 `main` 推送或手动触发后，执行验证、构建，幂等创建共享 D1 和 Pages 项目，配置 production bindings，发布 Worker 与 Pages，绑定自定义域名。需要 GitHub Actions Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`PROBE_TOKENS`、`ADMIN_PASSWORD`（至少 16 字符）、`ADMIN_SESSION_SECRET`（至少 32 字符）。Secrets 只在部署步骤提供，预览环境不注入生产秘密。资源名称和域名在工作流的非秘密环境变量中修改。`deploy/provision.py` 不删除其他资源，发现已有 DNS 指向其他项目时停止。原 `deploy.tf` 保留供已有 Terraform 部署使用，但本仓库默认工作流不运行它。
 
 `/api/probes/config` 与 `/api/probes/ingest` 可通过 Worker 或 Pages 同源访问。推荐探针配置 Pages 状态页地址，从而只维护一个地址。这两个精确路径由独立 bearer 鉴权，状态页原有 Basic 密码保护继续用于其他页面与 API。
 
 ## D1 安装与升级
 
-新部署：原 `deploy/init_d1.py` 自动执行更新后的 `init.sql`，包含新表。已有 D1：先执行幂等迁移，再发布新 Worker 与 Pages：
+新部署：`deploy/provision.py prepare` 自动执行更新后的 `init.sql`，包含新表。已有 D1：先执行幂等迁移，再发布新 Worker 与 Pages：
 
 ```sh
 cd worker
@@ -51,6 +51,16 @@ npx wrangler d1 execute uptimeflare_d1 --remote --file ../migrations/0001_extern
 也可以使用 `wrangler d1 migrations apply uptimeflare_d1 --remote`，`worker/wrangler.toml` 已设置迁移目录。先把示例 database ID 换成实际绑定。迁移不更改原 `uptimeflare` 表，不重写原 compact state。
 
 本地运行时，分别给 Worker 和 Pages 的本地变量文件设置测试用 `PROBE_TOKENS`；Worker 与 Pages 必须连接相同 D1。Docker 自托管会从容器环境读取变量，需给两者同样的 `PROBE_TOKENS` 并持久化 `.wrangler/state`。
+
+## 网页配置管理
+
+公开状态页无需登录。`/admin` 使用独立管理密码，密码和会话签名密钥设置为 Worker/Pages secrets，不写入公开源码。会话使用 Secure、HttpOnly、SameSite=Strict Cookie，8 小时过期；写操作校验同源 Origin，管理 API 不开放 CORS。每个来源地址每 15 分钟最多 10 次登录，D1 仅保存地址哈希。更换管理密码或签名密钥会使已有会话失效。
+
+登录后可以添加、编辑、删除 HTTP/HTTPS/TCP 目标，设置超时、状态码、关键词、请求头、请求体和探针分配，以及编辑探针显示名称、地区和过期时间。新探针身份仍需先在 `PROBE_TOKENS` 配置独立令牌。目标 ID 保持不变即可保留历史。
+
+保存后配置存储在 D1 `admin_config`，带版本冲突检测；探针下一次刷新通常在 5 分钟内获取。页面、API、scheduled Worker 和配置接口使用同一份配置。`uptime.config.ts` 仅作初始配置，第一次网页保存后，重部署不会覆盖 D1 配置。高级鉴权字段仅返回给已登录管理员和分配的探针。
+
+已有安装需要执行 `migrations/0002_admin_config.sql`（新安装的 `init.sql` 已包含）。移除目标或取消探针分配前先补传完队列；网页管理也提示该要求。
 
 ## 上线探针
 
