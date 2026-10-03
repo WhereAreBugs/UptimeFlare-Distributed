@@ -2,8 +2,8 @@ import { MonitorTarget, WebhookConfig } from '../../types/config'
 import { maintenances, workerConfig } from '../../uptime.config'
 
 async function getWorkerLocation() {
-  const res = await fetch('https://cloudflare.com/cdn-cgi/trace')
-  const text = await res.text()
+  const res = await fetchTimeout('https://cloudflare.com/cdn-cgi/trace', 3000)
+  const text = await withTimeout(3000, res.text())
 
   const colo = /^colo=(.*)$/m.exec(text)?.[1]
   return colo

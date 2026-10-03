@@ -74,3 +74,9 @@ CREATE TABLE IF NOT EXISTS admin_login_attempts (
   attempts INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS admin_login_retention ON admin_login_attempts(window);
+
+CREATE TABLE IF NOT EXISTS probe_metadata (
+  probe_id TEXT PRIMARY KEY,
+  default_name TEXT NOT NULL,
+  default_location TEXT NOT NULL
+) WITHOUT ROWID;

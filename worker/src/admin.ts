@@ -2,6 +2,7 @@ import type { MonitorTarget, WorkerConfig } from '../../types/config'
 import type { ProbeDefinition } from '../../types/probes'
 import type { ProbeEnv } from './probes'
 import { getSettings, type EditableSettings } from './settings'
+import { CLOUDFLARE_PROBE_ID } from './probe-labels'
 
 export interface AdminEnv extends ProbeEnv {
   ADMIN_PASSWORD?: string
@@ -116,9 +117,10 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
     !Array.isArray(value.monitors) ||
     value.monitors.length > 100 ||
     !Array.isArray(value.probes) ||
-    value.probes.length > 32
+    value.probes.length > 33 ||
+    value.probes.filter((probe: any) => probe?.id !== CLOUDFLARE_PROBE_ID).length > 32
   )
-    throw new AdminInputError('最多 100 个目标、32 个探针')
+    throw new AdminInputError('最多 100 个目标、32 个独立探针及 1 个 Cloudflare 探针')
   if (
     !Number.isInteger(value.probeStaleAfterSeconds) ||
     value.probeStaleAfterSeconds < 300 ||
@@ -132,9 +134,9 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
       typeof probe.id !== 'string' ||
       !ID.test(probe.id) ||
       ids.has(probe.id) ||
-      !registered.has(probe.id)
+      (!registered.has(probe.id) && probe.id !== CLOUDFLARE_PROBE_ID)
     )
-      throw new AdminInputError('探针 ID 必须唯一且已经配置独立令牌')
+      throw new AdminInputError('探针 ID 必须唯一；独立探针需要配置令牌，cloudflare 为内置探针')
     ids.add(probe.id)
     if (probe.name !== undefined && !text(probe.name, 200))
       throw new AdminInputError('探针名称过长或无效')
@@ -146,6 +148,7 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
       ...(probe.location !== undefined && { location: probe.location }),
     }
   })
+  if (!ids.has(CLOUDFLARE_PROBE_ID)) probes.push({ id: CLOUDFLARE_PROBE_ID })
   const monitorIds = new Set<string>()
   let assignments = 0
   const monitors: MonitorTarget[] = value.monitors.map((monitor: any) => {
@@ -186,7 +189,7 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
       !Array.isArray(monitor.probes) ||
       !monitor.probes.length ||
       new Set(monitor.probes).size !== monitor.probes.length ||
-      monitor.probes.some((id: string) => !ids.has(id))
+      monitor.probes.some((id: string) => !ids.has(id) && id !== CLOUDFLARE_PROBE_ID)
     )
       throw new AdminInputError('每个目标至少分配一个已注册探针')
     assignments += monitor.probes.length
@@ -335,7 +338,7 @@ export async function handleAdminRequest(
       )
       .run()
     if (!result.meta.changes) return json({ error: '配置已被其他窗口修改，请重新加载后保存' }, 409)
-    return json({ ...settings, revision: data.revision + 1 })
+    return json(await getSettings(env, fallback))
   } catch (error) {
     // Never echo D1 errors, SQL, configured targets, passwords or request contents.
     if (error instanceof AdminInputError) return json({ error: error.message }, 400)

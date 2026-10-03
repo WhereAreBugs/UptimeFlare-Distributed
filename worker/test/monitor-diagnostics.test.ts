@@ -3,9 +3,9 @@ import type { MonitorTarget } from '../../types/config'
 import { doMonitor } from '../src/monitor'
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }))
-vi.mock('../src/util', () => ({
+vi.mock('../src/util', async (original) => ({
   fetchTimeout: fetchMock,
-  withTimeout: (_timeout: number, promise: Promise<unknown>) => promise,
+  withTimeout: (await original<typeof import('../src/util')>()).withTimeout,
 }))
 
 const monitor: MonitorTarget = {
@@ -88,6 +88,35 @@ describe('native monitor incident diagnostics', () => {
       })
     }
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('keyword scanning bounds body size and releases the response stream', async () => {
+    const cancel = vi.fn()
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.enqueue(new Uint8Array(256 * 1024))
+          },
+          cancel,
+        })
+      )
+    )
+    const result = await doMonitor({ ...monitor, responseKeyword: 'expected' }, 'SIN', {} as never)
+    expect(result.status).toMatchObject({ up: false, stage: 'body', code: 'too_large' })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  test('a stalled body respects the overall timeout and retains body attribution', async () => {
+    const cancel = vi.fn()
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream({ cancel })))
+    const result = await doMonitor(
+      { ...monitor, timeout: 50, responseKeyword: 'expected' },
+      'SIN',
+      {} as never
+    )
+    expect(result.status).toMatchObject({ up: false, stage: 'body', code: 'timeout' })
+    expect(cancel).toHaveBeenCalledOnce()
   })
 
   test('failed proxy transport is classified separately and fallback retains target diagnostics', async () => {

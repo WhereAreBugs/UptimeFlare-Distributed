@@ -1,5 +1,13 @@
 /** Version 1 wire protocol shared with the standalone Go probe. Times are Unix seconds. */
-export type ProbeDefinition = { id: string; name?: string; location?: string }
+export type ProbeDefinition = {
+  id: string
+  /** Optional administrator override; empty means automatic IP geography + ASN. */
+  name?: string
+  location?: string
+  /** Derived display defaults, never saved as administrator overrides. */
+  defaultName?: string
+  defaultLocation?: string
+}
 export type ProbeStage = 'dns' | 'tcp' | 'tls' | 'http' | 'body' | 'configuration' | 'unknown'
 export type ProbeResult = {
   monitor_id: string

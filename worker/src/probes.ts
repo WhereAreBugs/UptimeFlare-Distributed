@@ -6,6 +6,7 @@ import type {
   ProbeResult,
   ProbeSummary,
 } from '../../types/probes'
+import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './probe-labels'
 
 export interface ProbeEnv {
   UPTIMEFLARE_D1: D1Database
@@ -59,6 +60,7 @@ function authenticate(request: Request, env: ProbeEnv): string {
   for (const [id, token] of entries) {
     if (
       !ID.test(id) ||
+      id === CLOUDFLARE_PROBE_ID ||
       typeof token !== 'string' ||
       token.length < 24 ||
       token.length > 512 ||
@@ -93,7 +95,7 @@ function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTa
       (monitor.probes &&
         (!Array.isArray(monitor.probes) ||
           monitor.probes.length === 0 ||
-          monitor.probes.length > 32 ||
+          monitor.probes.length > 33 ||
           monitor.probes.some((id) => !ID.test(id)) ||
           new Set(monitor.probes).size !== monitor.probes.length))
     ) {
@@ -203,7 +205,11 @@ function validateBatch(value: unknown, authorized: MonitorTarget[], now: number)
   return batch
 }
 
-async function persistBatch(env: ProbeEnv, probeId: string, results: ProbeResult[]): Promise<void> {
+export async function persistBatch(
+  env: ProbeEnv,
+  probeId: string,
+  results: ProbeResult[]
+): Promise<void> {
   // Normalize absent diagnostics once, so the SQL never persists unvalidated extra JSON fields.
   const payload = JSON.stringify(
     results.map((r) => ({
@@ -297,7 +303,8 @@ async function persistBatch(env: ProbeEnv, probeId: string, results: ProbeResult
 export async function handleProbeRequest(
   request: Request,
   env: ProbeEnv,
-  monitors: MonitorTarget[]
+  monitors: MonitorTarget[],
+  network?: ProbeNetwork
 ): Promise<Response> {
   try {
     const pathname = new URL(request.url).pathname
@@ -309,6 +316,12 @@ export async function handleProbeRequest(
     const probeId = authenticate(request, env)
     const assigned = assignedMonitors(monitors, probeId)
     if (expectedMethod === 'GET') {
+      try {
+        await recordProbeNetwork(env, probeId, network)
+      } catch {
+        // Automatic labels are optional; their storage must not prevent probe startup.
+        console.error('Probe network label update failed')
+      }
       return json({
         version: 1,
         probe_id: probeId,
@@ -414,9 +427,9 @@ export async function getProbeSummaries(
   if (!external.length) return {}
   if (
     external.length > 100 ||
-    definitions.length > 32 ||
+    definitions.length > 33 ||
     external.reduce((total, m) => total + (m.probes?.length || 0), 0) > 64 ||
-    external.some((m) => (m.probes?.length || 0) > 32)
+    external.some((m) => (m.probes?.length || 0) > 33)
   ) {
     throw new Error('Probe display configuration exceeds limits')
   }
@@ -488,8 +501,8 @@ export async function getProbeSummaries(
       const status = stale ? 'unknown' : latest!.up ? 'up' : 'down'
       const probe: ProbeSummary = {
         id,
-        name: definition?.name || id,
-        location: definition?.location,
+        name: definition?.name || definition?.defaultName || id,
+        location: definition?.location || definition?.defaultLocation || undefined,
         status,
         stale,
         latest: latest?.time ?? null,

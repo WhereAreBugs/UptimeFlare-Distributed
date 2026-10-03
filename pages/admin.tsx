@@ -181,7 +181,8 @@ export default function Admin() {
               <Stack>
                 <Title order={3}>探针</Title>
                 <Text size="sm" c="dimmed">
-                  探针 ID 与独立令牌绑定。可修改显示名称和地区；新增探针需要先配置服务端令牌。
+                  Cloudflare 为内置探针，无需令牌。独立探针的默认名称为公网 IP 归属地与 ASN。
+                  名称留空使用自动命名；手动填写可覆盖。新增独立探针需要先配置服务端令牌。
                 </Text>
                 {config.probes.map((probe, index) => (
                   <Group key={probe.id} align="end" grow>
@@ -189,6 +190,8 @@ export default function Admin() {
                     <TextInput
                       label="显示名称"
                       value={probe.name ?? ''}
+                      placeholder={probe.defaultName ?? probe.id}
+                      description={`自动名称：${probe.defaultName ?? probe.id}`}
                       onChange={(e) => {
                         const name = e.currentTarget.value
                         setConfig({
@@ -200,6 +203,7 @@ export default function Admin() {
                     <TextInput
                       label="地区 / 运营商"
                       value={probe.location ?? ''}
+                      placeholder={probe.defaultLocation ?? ''}
                       onChange={(e) => {
                         const location = e.currentTarget.value
                         setConfig({
@@ -308,7 +312,10 @@ export default function Admin() {
                     />
                     <MultiSelect
                       label="执行探针"
-                      data={config.probes.map((p) => ({ value: p.id, label: p.name || p.id }))}
+                      data={config.probes.map((p) => ({
+                        value: p.id,
+                        label: p.name || p.defaultName || p.id,
+                      }))}
                       value={probes ?? []}
                       onChange={(v) => updateMonitor(index, { probes: v })}
                     />

@@ -31,7 +31,7 @@ export type PageConfigLink = {
 }
 
 export type MonitorTarget = {
-  /** Assign this target to external probes instead of the scheduled Cloudflare checker. */
+  /** Assigned probes, including reserved ID `cloudflare` for the scheduled Worker. */
   probes?: string[]
   id: string
   name: string

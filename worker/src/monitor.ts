@@ -8,6 +8,37 @@ import {
   type NativeCheckStatus,
 } from './diagnostics'
 
+/** Bound keyword responses and include body reads in the configured check deadline. */
+async function readBoundedBody(response: Response, deadline: number): Promise<string> {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const chunks: string[] = []
+  let bytes = 0
+  try {
+    while (true) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw new Error('[body/timeout] HTTP response body timed out')
+      let part: ReadableStreamReadResult<Uint8Array>
+      try {
+        part = await withTimeout(remaining, reader.read())
+      } catch (error) {
+        if (Date.now() >= deadline) throw new Error('[body/timeout] HTTP response body timed out')
+        throw error
+      }
+      if (part.done) break
+      bytes += part.value.byteLength
+      if (bytes > 1024 * 1024) throw new Error('[body/too_large] HTTP response body exceeds 1 MiB')
+      chunks.push(decoder.decode(part.value, { stream: true }))
+    }
+    chunks.push(decoder.decode())
+    return chunks.join('')
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+}
+
 function isIpAddress(hostname: string): boolean {
   // `URL.hostname` strips brackets for IPv6, so a `:` reliably indicates an IPv6 literal here.
   if (hostname.includes(':')) return true
@@ -337,10 +368,8 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
       console.log(`${monitor.name} responded with ${response.status}`)
       status.ping = Date.now() - startTime
 
-      const err = await httpResponseBasicCheck(
-        monitor,
-        response.status,
-        response.text.bind(response)
+      const err = await httpResponseBasicCheck(monitor, response.status, () =>
+        readBoundedBody(response, startTime + (monitor.timeout || 10000))
       )
       try {
         await response.body?.cancel()

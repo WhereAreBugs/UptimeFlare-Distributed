@@ -61,7 +61,11 @@ function safeMessage(stage: NativeFailureStage, code: string, original: string):
       original === 'HTTP response contains the configured forbidden keyword'
       ? original
       : 'HTTP response content failed the configured keyword check'
-  if (stage === 'body') return 'Failed while reading the HTTP response body'
+  if (stage === 'body') {
+    if (code === 'timeout') return 'HTTP response body timed out'
+    if (code === 'too_large') return 'HTTP response body exceeds the 1 MiB limit'
+    return 'Failed while reading the HTTP response body'
+  }
   if (stage === 'configuration') return 'Invalid or unsupported monitor configuration'
   if (stage === 'proxy') return 'The check proxy failed to return a usable result'
   if (stage === 'dns')
@@ -102,7 +106,7 @@ export function classifyNativeFailure(error: unknown, context: Context = 'http')
       tcp: ['timeout', 'refused', 'reset', 'unreachable', 'unknown'],
       tls: ['certificate', 'unknown'],
       http: ['status', 'unknown'],
-      body: ['keyword', 'read', 'unknown'],
+      body: ['keyword', 'read', 'timeout', 'too_large', 'unknown'],
       configuration: ['invalid_request', 'invalid_target', 'unknown'],
       proxy: ['unknown'],
       unknown: ['timeout', 'unknown'],

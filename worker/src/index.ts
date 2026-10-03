@@ -8,6 +8,8 @@ import pLimit from 'p-limit'
 import { handleProbeRequest, cleanupProbeResults } from './probes'
 import { getRuntimeConfig } from './settings'
 import { handleAdminRequest } from './admin'
+import { CLOUDFLARE_PROBE_ID } from './probe-labels'
+import { runCloudflareProbe } from './cloudflare-probe'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
@@ -22,7 +24,12 @@ const Worker = {
     if (new URL(request.url).pathname.startsWith('/api/admin/'))
       return handleAdminRequest(request, env, fallbackConfig)
     const workerConfig = await getRuntimeConfig(env, fallbackConfig)
-    return handleProbeRequest(request, env, workerConfig.monitors)
+    return handleProbeRequest(
+      request,
+      env,
+      workerConfig.monitors,
+      request.cf as IncomingRequestCfProperties | undefined
+    )
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
@@ -38,8 +45,17 @@ const Worker = {
         .catch(() => console.error('Admin login cleanup failed'))
     )
     const nativeMonitors = workerConfig.monitors.filter((monitor) => !monitor.probes?.length)
+    const cloudflareMonitors = workerConfig.monitors.filter(
+      (monitor) => monitor.probes?.includes(CLOUDFLARE_PROBE_ID)
+    )
+    if (!nativeMonitors.length && !cloudflareMonitors.length) return
+    const workerLocation = (await getWorkerLocation().catch(() => undefined)) || 'UNKNOWN'
+    if (cloudflareMonitors.length) {
+      // Stable minute identity makes a repeated cron event idempotent.
+      const time = Math.floor(event.scheduledTime / 60000) * 60
+      await runCloudflareProbe(env, cloudflareMonitors, time, workerLocation)
+    }
     if (!nativeMonitors.length) return
-    const workerLocation = (await getWorkerLocation()) || 'ERROR'
     console.log(`Running scheduled event on ${workerLocation}...`)
 
     // Create a wrapped MonitorState from stored compacted state
