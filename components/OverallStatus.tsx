@@ -1,10 +1,16 @@
 import { MaintenanceConfig, MonitorTarget } from '@/types/config'
-import { Center, Container, Title, Collapse, Button, Box } from '@mantine/core'
-import { IconCircleCheck, IconAlertCircle, IconPlus, IconMinus } from '@tabler/icons-react'
+import { Center, Container, Title, Collapse, Group, Badge } from '@mantine/core'
+import {
+  IconCircleCheck,
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconHelpCircle,
+} from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 import MaintenanceAlert from './MaintenanceAlert'
 import { pageConfig } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
+import { statusColors, summarizeMonitors } from '@/util/probe-status'
 
 function useWindowVisibility() {
   const [isVisible, setIsVisible] = useState(true)
@@ -20,10 +26,12 @@ export default function OverallStatus({
   state,
   maintenances,
   monitors,
+  aggregate,
 }: {
   state: { overallUp: number; overallDown: number; lastUpdate: number }
   maintenances: MaintenanceConfig[]
   monitors: MonitorTarget[]
+  aggregate?: ReturnType<typeof summarizeMonitors>
 }) {
   const { t } = useTranslation('common')
   let group = pageConfig.group
@@ -31,18 +39,28 @@ export default function OverallStatus({
 
   let statusString = ''
   let icon = <IconAlertCircle style={{ width: 64, height: 64, color: '#b91c1c' }} />
-  if (state.overallUp === 0 && state.overallDown === 0) {
+  const counts = aggregate ?? {
+    up: state.overallUp,
+    down: state.overallDown,
+    degraded: 0,
+    unknown: 0,
+    total: state.overallUp + state.overallDown,
+    lastUpdate: state.lastUpdate,
+  }
+  if (counts.total === 0 || counts.unknown === counts.total) {
     statusString = t('No data yet')
-  } else if (state.overallUp === 0) {
+    icon = <IconHelpCircle style={{ width: 64, height: 64, color: statusColors.unknown }} />
+  } else if (counts.down === counts.total) {
     statusString = t('All systems not operational')
-  } else if (state.overallDown === 0) {
+  } else if (counts.up === counts.total) {
     statusString = t('All systems operational')
     icon = <IconCircleCheck style={{ width: 64, height: 64, color: '#059669' }} />
   } else {
-    statusString = t('Some systems not operational', {
-      down: state.overallDown,
-      total: state.overallUp + state.overallDown,
-    })
+    statusString =
+      counts.degraded || counts.unknown
+        ? t('Probe overall mixed')
+        : t('Some systems not operational', { down: counts.down, total: counts.total })
+    icon = <IconAlertTriangle style={{ width: 64, height: 64, color: statusColors.degraded }} />
   }
 
   const [openTime] = useState(Math.round(Date.now() / 1000))
@@ -53,13 +71,14 @@ export default function OverallStatus({
   useEffect(() => {
     const interval = setInterval(() => {
       if (!isWindowVisible) return
-      if (currentTime - state.lastUpdate > 300 && currentTime - openTime > 30) {
+      const now = Math.round(Date.now() / 1000)
+      if (now - openTime >= 300) {
         window.location.reload()
       }
-      setCurrentTime(Math.round(Date.now() / 1000))
+      setCurrentTime(now)
     }, 1000)
     return () => clearInterval(interval)
-  })
+  }, [isWindowVisible, openTime])
 
   const now = new Date()
 
@@ -92,11 +111,29 @@ export default function OverallStatus({
         {statusString}
       </Title>
       <Title mt="sm" style={{ textAlign: 'center', color: '#70778c' }} order={5}>
-        {t('Last updated on', {
-          date: new Date(state.lastUpdate * 1000).toLocaleString(),
-          seconds: currentTime - state.lastUpdate,
-        })}
+        {counts.lastUpdate
+          ? t('Last updated on', {
+              date: new Date(counts.lastUpdate * 1000).toLocaleString(),
+              seconds: Math.max(0, currentTime - counts.lastUpdate),
+            })
+          : t('Probe never reported')}
       </Title>
+      {!!aggregate && (
+        <Group justify="center" gap="xs" mt="sm">
+          <Badge color={statusColors.up} variant="light">
+            {t('Probe operational')}: {counts.up}
+          </Badge>
+          <Badge color={statusColors.degraded} variant="light">
+            {t('Probe partial reachability')}: {counts.degraded}
+          </Badge>
+          <Badge color={statusColors.down} variant="light">
+            {t('Probe unreachable')}: {counts.down}
+          </Badge>
+          <Badge color={statusColors.unknown} variant="light">
+            {t('Probe unknown')}: {counts.unknown}
+          </Badge>
+        </Group>
+      )}
 
       {/* Upcoming Maintenance */}
       {upcomingMaintenances.length > 0 && (

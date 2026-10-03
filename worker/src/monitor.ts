@@ -1,6 +1,12 @@
 import { Env } from '.'
 import { MonitorTarget } from '../../types/config'
 import { withTimeout, fetchTimeout } from './util'
+import {
+  classifyNativeFailure,
+  formatNativeDiagnostic,
+  parseNativeTcpTarget,
+  type NativeCheckStatus,
+} from './diagnostics'
 
 function isIpAddress(hostname: string): boolean {
   // `URL.hostname` strips brackets for IPv6, so a `:` reliably indicates an IPv6 literal here.
@@ -41,15 +47,16 @@ async function httpResponseBasicCheck(
 
   if (monitor.responseKeyword || monitor.responseForbiddenKeyword) {
     // Only read response body if we have a keyword to check
-    const responseBody = await bodyReader()
+    let responseBody: string
+    try {
+      responseBody = await bodyReader()
+    } catch (error) {
+      return formatNativeDiagnostic(classifyNativeFailure(error, 'body'))
+    }
 
     // MUST contain responseKeyword
     if (monitor.responseKeyword && !responseBody.includes(monitor.responseKeyword)) {
-      console.log(
-        `${monitor.name} expected keyword ${
-          monitor.responseKeyword
-        }, not found in response (truncated to 100 chars): ${responseBody.slice(0, 100)}`
-      )
+      console.log(`${monitor.name} failed the expected response keyword check`)
       return "HTTP response doesn't contain the configured keyword"
     }
 
@@ -58,11 +65,7 @@ async function httpResponseBasicCheck(
       monitor.responseForbiddenKeyword &&
       responseBody.includes(monitor.responseForbiddenKeyword)
     ) {
-      console.log(
-        `${monitor.name} forbidden keyword ${
-          monitor.responseForbiddenKeyword
-        }, found in response (truncated to 100 chars): ${responseBody.slice(0, 100)}`
-      )
+      console.log(`${monitor.name} failed the forbidden response keyword check`)
       return 'HTTP response contains the configured forbidden keyword'
     }
   }
@@ -72,7 +75,8 @@ async function httpResponseBasicCheck(
 
 export async function getStatusWithGlobalPing(
   monitor: MonitorTarget
-): Promise<{ location: string; status: { ping: number; up: boolean; err: string } }> {
+): Promise<{ location: string; status: NativeCheckStatus }> {
+  let failureContext: 'configuration' | 'proxy' = 'configuration'
   // TODO: should throw when there's error with globalping API
   try {
     if (monitor.checkProxy === undefined) {
@@ -88,7 +92,7 @@ export async function getStatusWithGlobalPing(
     let globalPingRequest = {}
 
     if (monitor.method === 'TCP_PING') {
-      const targetUrl = new URL('https://' + monitor.target) // dummy https:// to parse hostname & port
+      const targetUrl = parseNativeTcpTarget(monitor.target)
       const ipVersionOption = getDomainOnlyIpVersionOption(targetUrl.hostname, gpUrl)
       globalPingRequest = {
         type: 'ping',
@@ -150,7 +154,8 @@ export async function getStatusWithGlobalPing(
     }
 
     const startTime = Date.now()
-    console.log(`Requesting the Global Ping API, payload: ${JSON.stringify(globalPingRequest)}`)
+    console.log('Requesting a Globalping measurement')
+    failureContext = 'proxy'
     const measurement = await fetchTimeout('https://api.globalping.io/v1/measurements', 5000, {
       method: 'POST',
       headers: {
@@ -190,11 +195,7 @@ export async function getStatusWithGlobalPing(
       await new Promise((resolve) => setTimeout(resolve, 1000))
     }
 
-    console.log(
-      `Measurement ${measurementId} finished with response: ${JSON.stringify(
-        measurementResult
-      )}, time elapsed: ${Date.now() - pollStart}ms`
-    )
+    console.log(`Measurement ${measurementId} finished, time elapsed: ${Date.now() - pollStart}ms`)
 
     if (
       measurementResult.status !== 'finished' ||
@@ -236,10 +237,8 @@ export async function getStatusWithGlobalPing(
         monitor.target.toLowerCase().startsWith('https') &&
         !measurementResult.results[0].result.tls.authorized
       ) {
-        console.log(
-          `${monitor.name} TLS certificate not trusted: ${measurementResult.results[0].result.tls.error}`
-        )
-        err = 'TLS certificate not trusted: ' + measurementResult.results[0].result.tls.error
+        console.log(`${monitor.name} failed TLS certificate validation`)
+        err = '[tls/certificate] TLS certificate validation failed'
       }
 
       return {
@@ -252,22 +251,23 @@ export async function getStatusWithGlobalPing(
       }
     }
   } catch (e: any) {
-    console.log(`Globalping ${monitor.name} errored with ${e}`)
+    const diagnostic = classifyNativeFailure(e, failureContext)
+    console.log(`Globalping ${monitor.name} failed: ${formatNativeDiagnostic(diagnostic)}`)
     return {
       location: 'ERROR',
       status: {
-        ping: e.toString().toLowerCase().includes('timeout') ? monitor.timeout ?? 10000 : 0,
+        ping: diagnostic.code === 'timeout' ? monitor.timeout ?? 10000 : 0,
         up: false,
-        err: 'Globalping error: ' + e.toString(),
+        err: formatNativeDiagnostic(diagnostic),
+        stage: diagnostic.stage,
+        code: diagnostic.code,
       },
     }
   }
 }
 
-export async function getStatus(
-  monitor: MonitorTarget
-): Promise<{ ping: number; up: boolean; err: string }> {
-  let status = {
+export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStatus> {
+  let status: NativeCheckStatus = {
     ping: 0,
     up: false,
     err: 'Unknown',
@@ -277,34 +277,47 @@ export async function getStatus(
 
   if (monitor.method === 'TCP_PING') {
     // TCP port endpoint monitor
+    let socket: { close: () => Promise<void> } | undefined
     try {
+      const parsed = parseNativeTcpTarget(monitor.target)
       const connect = await import(/* webpackIgnore: true */ 'cloudflare:sockets').then(
         (sockets) => sockets.connect
       )
-      // This is not a real https connection, but we need to add a dummy `https://` to parse the hostname & port
-      const parsed = new URL('https://' + monitor.target)
-      const socket = connect({ hostname: parsed.hostname, port: Number(parsed.port) })
+      const connected = connect(parsed)
+      socket = connected
 
       // Now we have an `opened` promise!
-      await withTimeout(monitor.timeout || 10000, socket.opened)
-      await socket.close()
+      await withTimeout(monitor.timeout || 10000, connected.opened)
 
-      console.log(`${monitor.name} connected to ${monitor.target}`)
+      console.log(`${monitor.name} connected successfully`)
 
       status.ping = Date.now() - startTime
       status.up = true
       status.err = ''
     } catch (e: Error | any) {
-      console.log(`${monitor.name} errored with ${e.name}: ${e.message}`)
-      if (e.message.includes('timed out')) {
+      const diagnostic = classifyNativeFailure(e, 'tcp')
+      console.log(`${monitor.name} failed: ${formatNativeDiagnostic(diagnostic)}`)
+      if (diagnostic.code === 'timeout') {
         status.ping = monitor.timeout || 10000
       }
       status.up = false
-      status.err = e.name + ': ' + e.message
+      status.err = formatNativeDiagnostic(diagnostic)
+      status.stage = diagnostic.stage
+      status.code = diagnostic.code
+    } finally {
+      // Cleanup failures do not establish that a successfully opened connection was unreachable.
+      try {
+        await socket?.close()
+      } catch {
+        /* Best effort socket cleanup. */
+      }
     }
   } else {
     // HTTP endpoint monitor
     try {
+      const parsed = new URL(monitor.target)
+      if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname)
+        throw new Error('Unsupported URL protocol')
       let headers = new Headers(monitor.headers as any)
       if (!headers.has('user-agent')) {
         headers.set('user-agent', 'UptimeFlare/1.0 (+https://github.com/lyc8503/UptimeFlare)')
@@ -339,15 +352,15 @@ export async function getStatus(
       status.up = err === null
       status.err = err ?? ''
     } catch (e: any) {
-      console.log(`${monitor.name} errored with ${e.name}: ${e.message}`)
-      if (e.name === 'AbortError') {
+      const diagnostic = classifyNativeFailure(e, 'http')
+      console.log(`${monitor.name} failed: ${formatNativeDiagnostic(diagnostic)}`)
+      if (diagnostic.code === 'timeout') {
         status.ping = monitor.timeout || 10000
-        status.up = false
-        status.err = `Timeout after ${status.ping}ms`
-      } else {
-        status.up = false
-        status.err = e.name + ': ' + e.message
       }
+      status.up = false
+      status.err = formatNativeDiagnostic(diagnostic)
+      status.stage = diagnostic.stage
+      status.code = diagnostic.code
     }
   }
 
@@ -361,7 +374,7 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
   if (monitor.checkProxy) {
     // Initiate a check using proxy (Geo-specific monitoring)
     try {
-      console.log(`[${monitor.id}] Calling check proxy: ${monitor.checkProxy}`)
+      console.log(`[${monitor.id}] Calling check proxy`)
       let resp
       if (monitor.checkProxy.startsWith('worker://')) {
         const doLoc = monitor.checkProxy.replace('worker://', '')
@@ -379,24 +392,36 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
       } else if (monitor.checkProxy.startsWith('globalping://')) {
         resp = await getStatusWithGlobalPing(monitor)
       } else {
-        resp = await (
-          await fetch(monitor.checkProxy, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(monitor),
-          })
-        ).json<{ location: string; status: { ping: number; up: boolean; err: string } }>()
+        const response = await fetchTimeout(monitor.checkProxy, monitor.timeout || 10000, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(monitor),
+        })
+        if (!response.ok) throw new Error('Check proxy returned an unsuccessful HTTP response')
+        resp = await response.json<{ location: string; status: NativeCheckStatus }>()
       }
+      if (
+        !resp ||
+        typeof resp.location !== 'string' ||
+        typeof resp.status?.up !== 'boolean' ||
+        typeof resp.status.err !== 'string' ||
+        !Number.isFinite(resp.status.ping)
+      )
+        throw new Error('Invalid check proxy response')
       checkLocation = resp.location
       status = resp.status
     } catch (err) {
-      console.log(`[${monitor.id}] Error calling proxy: ${err}`)
+      console.log(`[${monitor.id}] Check proxy failed`)
       if (monitor.checkProxyFallback) {
         console.log('Falling back to local check...')
         status = await getStatus(monitor)
       } else {
         // TODO: more consistent error handling (throw or return?)
-        status = { ping: 0, up: false, err: 'Unknown check proxy error' }
+        status = {
+          ping: 0,
+          up: false,
+          err: formatNativeDiagnostic(classifyNativeFailure(err, 'proxy')),
+        }
       }
     }
   } else {
@@ -404,7 +429,25 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
     status = await getStatus(monitor)
   }
 
-  console.log(`[${monitor.id}] Check result from ${checkLocation}: up=${status.up}, ping=${status.ping}, err=${status.err}`)
+  if (!status.up) {
+    const diagnostic = classifyNativeFailure(
+      status.err,
+      monitor.method === 'TCP_PING' ? 'tcp' : 'http'
+    )
+    status = {
+      ping: status.ping,
+      up: false,
+      err: formatNativeDiagnostic(diagnostic),
+      stage: diagnostic.stage,
+      code: diagnostic.code,
+    }
+  } else {
+    status = { ping: status.ping, up: true, err: '' }
+  }
+
+  console.log(
+    `[${monitor.id}] Check result from ${checkLocation}: up=${status.up}, ping=${status.ping}, err=${status.err}`
+  )
 
   return {
     location: checkLocation,

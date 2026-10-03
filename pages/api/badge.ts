@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server'
 import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
+import { getProbeSummaries } from '@/worker/src/probes'
+import type { MonitorStatus } from '@/util/probe-status'
 
 export const runtime = 'edge'
 
@@ -45,21 +47,54 @@ export default async function handler(req: NextRequest): Promise<Response> {
       })
     }
 
-    const compactedState = new CompactedMonitorStateWrapper(
-      await getFromStore(process.env as any, 'state')
-    )
-
-    const lastIncident = compactedState.getIncident(
-      monitorId,
-      compactedState.incidentLen(monitorId) - 1
-    )
-    const isUp = lastIncident?.end !== null
+    const { workerConfig } = await import('@/uptime.config')
+    const monitor = workerConfig.monitors.find((monitor) => monitor.id === monitorId)
+    if (!monitor)
+      return new Response(JSON.stringify(errorBadge(label, 'monitor-not-found')), {
+        status: 404,
+        headers: jsonHeaders,
+      })
+    let status: MonitorStatus = 'unknown'
+    if (monitor.probes?.length) {
+      const summaries = await getProbeSummaries(
+        process.env as any,
+        [monitor],
+        workerConfig.probes,
+        Math.round(Date.now() / 1000),
+        workerConfig.probeStaleAfterSeconds
+      )
+      status = summaries[monitor.id].status
+    } else {
+      const compactedState = new CompactedMonitorStateWrapper(
+        await getFromStore(process.env as any, 'state')
+      )
+      const incidentCount = compactedState.incidentLen(monitorId)
+      const lastIncident = incidentCount
+        ? compactedState.getIncident(monitorId, incidentCount - 1)
+        : null
+      if (compactedState.latencyLen(monitorId) && lastIncident)
+        status = lastIncident.end === null ? 'down' : 'up'
+    }
 
     const badge: BadgePayload = {
       schemaVersion: 1,
       label,
-      message: isUp ? upMsg : downMsg,
-      color: isUp ? colorUp : colorDown,
+      message:
+        status === 'up'
+          ? upMsg
+          : status === 'down'
+          ? downMsg
+          : status === 'degraded'
+          ? url.searchParams.get('degraded') ?? 'PARTIAL'
+          : url.searchParams.get('unknown') ?? 'UNKNOWN',
+      color:
+        status === 'up'
+          ? colorUp
+          : status === 'down'
+          ? colorDown
+          : status === 'degraded'
+          ? url.searchParams.get('colorDegraded') ?? 'orange'
+          : url.searchParams.get('colorUnknown') ?? 'lightgrey',
     }
 
     return new Response(JSON.stringify(badge), {

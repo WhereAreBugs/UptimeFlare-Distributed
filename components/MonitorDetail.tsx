@@ -6,17 +6,36 @@ import DetailBar from './DetailBar'
 import { getColor } from '@/util/color'
 import { maintenances } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
+import type { ProbeMonitorSummary } from '@/types/probes'
+import ProbeMonitorDetail from './ProbeMonitorDetail'
 
 export default function MonitorDetail({
   monitor,
   state,
+  probeSummaries = {},
+  now = Math.round(Date.now() / 1000),
+  staleAfterSeconds,
 }: {
   monitor: MonitorTarget
   state: MonitorState
+  probeSummaries?: Record<string, ProbeMonitorSummary>
+  now?: number
+  staleAfterSeconds?: number
 }) {
   const { t } = useTranslation('common')
 
-  if (!state.latency[monitor.id])
+  if (monitor.probes?.length)
+    return (
+      <ProbeMonitorDetail
+        monitor={monitor}
+        summary={probeSummaries[monitor.id]}
+        now={now}
+        staleAfterSeconds={staleAfterSeconds}
+      />
+    )
+
+  const incidents = state.incident[monitor.id]
+  if (!state.latency[monitor.id]?.length || !incidents?.length)
     return (
       <>
         <Text mt="sm" fw={700}>
@@ -29,7 +48,7 @@ export default function MonitorDetail({
     )
 
   let statusIcon =
-    state.incident[monitor.id].slice(-1)[0].end === null ? (
+    incidents.slice(-1)[0].end === null ? (
       <IconAlertCircle
         style={{ width: '1.25em', height: '1.25em', color: '#b91c1c', marginRight: '3px' }}
       />
@@ -40,9 +59,9 @@ export default function MonitorDetail({
     )
 
   // Hide real status icon if monitor is in maintenance
-  const now = new Date()
+  const currentDate = new Date(now * 1000)
   const hasMaintenance = maintenances
-    .filter((m) => now >= new Date(m.start) && (!m.end || now <= new Date(m.end)))
+    .filter((m) => currentDate >= new Date(m.start) && (!m.end || currentDate <= new Date(m.end)))
     .find((maintenance) => maintenance.monitors?.includes(monitor.id))
   if (hasMaintenance)
     statusIcon = (
@@ -56,13 +75,15 @@ export default function MonitorDetail({
       />
     )
 
-  let totalTime = Date.now() / 1000 - state.incident[monitor.id][0].start[0]
+  let totalTime = now - incidents[0].start[0]
   let downTime = 0
-  for (let incident of state.incident[monitor.id]) {
-    downTime += (incident.end ?? Date.now() / 1000) - incident.start[0]
+  for (let incident of incidents) {
+    downTime += (incident.end ?? now) - incident.start[0]
   }
 
-  const uptimePercent = (((totalTime - downTime) / totalTime) * 100).toPrecision(4)
+  const uptimePercent = (
+    totalTime > 0 ? ((totalTime - downTime) / totalTime) * 100 : 100
+  ).toPrecision(4)
 
   // Conditionally render monitor name with or without hyperlink based on monitor.url presence
   const monitorNameElement = (
@@ -71,6 +92,7 @@ export default function MonitorDetail({
         <a
           href={monitor.statusPageLink}
           target="_blank"
+          rel="noreferrer"
           style={{ display: 'inline-flex', alignItems: 'center', color: 'inherit' }}
         >
           {statusIcon} {monitor.name}

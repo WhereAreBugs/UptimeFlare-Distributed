@@ -4,23 +4,29 @@ import { Inter } from 'next/font/google'
 import { MaintenanceConfig, MonitorTarget } from '@/types/config'
 import { maintenances, pageConfig } from '@/uptime.config'
 import Header from '@/components/Header'
-import { Box, Button, Center, Container, Group, Select } from '@mantine/core'
+import { Box, Button, Center, Container, Group, Select, Table, Text } from '@mantine/core'
 import Footer from '@/components/Footer'
 import { useEffect, useState } from 'react'
 import MaintenanceAlert from '@/components/MaintenanceAlert'
 import NoIncidentsAlert from '@/components/NoIncidents'
 import { useTranslation } from 'react-i18next'
+import { getProbeSummaries } from '@/worker/src/probes'
+import type { ProbeFailure } from '@/types/probes'
+
+type ProbeFailureRow = ProbeFailure & { monitorId: string; monitorName: string; probeName: string }
 
 export const runtime = 'experimental-edge'
 const inter = Inter({ subsets: ['latin'] })
 
 function getSelectedMonth() {
-  const hash = window.location.hash.replace('#', '')
+  const hash = typeof window === 'undefined' ? '' : window.location.hash.replace('#', '')
   if (!hash) {
     const now = new Date()
     return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0')
   }
-  return hash.split('-').splice(0, 2).join('-')
+  return /^\d{4}-(0[1-9]|1[0-2])(?:-|$)/.test(hash)
+    ? hash.split('-').slice(0, 2).join('-')
+    : new Date().toISOString().slice(0, 7)
 }
 
 function filterIncidentsByMonth(
@@ -36,7 +42,9 @@ function filterIncidentsByMonth(
     })
     .map((e) => ({
       ...e,
-      monitors: (e.monitors || []).map((e) => monitors.find((mon) => mon.id === e)!),
+      monitors: (e.monitors || [])
+        .map((e) => monitors.find((mon) => mon.id === e))
+        .filter((monitor): monitor is MonitorTarget => !!monitor),
     }))
     .sort((a, b) => (new Date(a.start) > new Date(b.start) ? -1 : 1))
 }
@@ -54,7 +62,13 @@ function getPrevNextMonth(monthStr: string) {
   }
 }
 
-export default function IncidentsPage({ monitors }: { monitors: MonitorTarget[] }) {
+export default function IncidentsPage({
+  monitors,
+  probeFailures = [],
+}: {
+  monitors: MonitorTarget[]
+  probeFailures?: ProbeFailureRow[]
+}) {
   const { t } = useTranslation('common')
   const [selectedMonitor, setSelectedMonitor] = useState<string | null>('')
   const [selectedMonth, setSelectedMonth] = useState(getSelectedMonth())
@@ -69,6 +83,11 @@ export default function IncidentsPage({ monitors }: { monitors: MonitorTarget[] 
   const monitorFilteredIncidents = selectedMonitor
     ? filteredIncidents.filter((i) => i.monitors.find((e) => e.id === selectedMonitor))
     : filteredIncidents
+  const visibleProbeFailures = probeFailures.filter((failure) => {
+    const date = new Date(failure.time * 1000)
+    const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+    return month === selectedMonth && (!selectedMonitor || failure.monitorId === selectedMonitor)
+  })
 
   const { prev, next } = getPrevNextMonth(selectedMonth)
 
@@ -106,6 +125,61 @@ export default function IncidentsPage({ monitors }: { monitors: MonitorTarget[] 
               />
             </Group>
             <Box>
+              {monitors.some((monitor) => monitor.probes?.length) && (
+                <Box mb="xl">
+                  <Text fw={700} mb="xs">
+                    {t('Probe failed checks heading')}
+                  </Text>
+                  <Text size="sm" c="dimmed" mb="sm">
+                    {t('Probe incidents limit')}
+                  </Text>
+                  {visibleProbeFailures.length ? (
+                    <div style={{ overflow: 'auto', maxHeight: 500 }}>
+                      <Table striped highlightOnHover style={{ minWidth: 760 }}>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>{t('Probe time')}</Table.Th>
+                            <Table.Th>{t('Probe monitor')}</Table.Th>
+                            <Table.Th>{t('Probe name')}</Table.Th>
+                            <Table.Th>{t('Probe stage')}</Table.Th>
+                            <Table.Th>{t('Probe error code')}</Table.Th>
+                            <Table.Th>{t('Probe error detail')}</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {visibleProbeFailures.map((failure, index) => (
+                            <Table.Tr key={`${failure.time}-${index}`}>
+                              <Table.Td style={{ whiteSpace: 'nowrap' }}>
+                                {new Date(failure.time * 1000).toLocaleString()}
+                              </Table.Td>
+                              <Table.Td>
+                                <a href={`/#${failure.monitorId}`}>{failure.monitorName}</a>
+                              </Table.Td>
+                              <Table.Td>{failure.probeName}</Table.Td>
+                              <Table.Td>
+                                {t(`Probe stage ${failure.stage}`, { defaultValue: failure.stage })}
+                              </Table.Td>
+                              <Table.Td>{failure.code}</Table.Td>
+                              <Table.Td style={{ overflowWrap: 'anywhere' }}>
+                                {failure.message}
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      {t('Probe no failed checks in month')}
+                    </Text>
+                  )}
+                </Box>
+              )}
+              {monitors.some((monitor) => monitor.probes?.length) && (
+                <Text fw={700} mb="xs">
+                  {t('Probe published incidents')}
+                </Text>
+              )}
               {monitorFilteredIncidents.length === 0 ? (
                 <NoIncidentsAlert />
               ) : (
@@ -139,6 +213,28 @@ export async function getServerSideProps() {
   const monitors: MonitorTarget[] = workerConfig.monitors.map((monitor) => ({
     id: monitor.id,
     name: monitor.name,
+    ...(monitor.probes?.length && { probes: monitor.probes }),
   })) as MonitorTarget[]
-  return { props: { monitors } }
+  const summaries = await getProbeSummaries(
+    process.env as any,
+    workerConfig.monitors,
+    workerConfig.probes,
+    Math.round(Date.now() / 1000),
+    workerConfig.probeStaleAfterSeconds
+  )
+  const probeFailures = Object.values(summaries)
+    .flatMap((summary) =>
+      summary.probes.flatMap((probe) =>
+        probe.recentFailures.map((failure) => ({
+          ...failure,
+          monitorId: summary.monitorId,
+          monitorName:
+            monitors.find((monitor) => monitor.id === summary.monitorId)?.name ?? summary.monitorId,
+          probeName: probe.name,
+        }))
+      )
+    )
+    .sort((a, b) => b.time - a.time)
+    .slice(0, 200)
+  return { props: { monitors, probeFailures } }
 }
