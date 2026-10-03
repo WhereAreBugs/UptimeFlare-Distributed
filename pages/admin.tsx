@@ -12,6 +12,7 @@ import {
   PasswordInput,
   Select,
   Stack,
+  Tabs,
   Text,
   TextInput,
   Textarea,
@@ -221,248 +222,276 @@ export default function Admin() {
                 </Button>
               </Group>
             </Group>
-            <Paper withBorder p="md">
-              <Stack>
-                <Title order={3}>探针</Title>
-                <Text size="sm" c="dimmed">
-                  Cloudflare 为内置探针，无需令牌。独立探针的默认名称为公网 IP 归属地与 ASN。
-                  名称留空使用自动命名；手动填写可覆盖。新增独立探针需要先配置服务端令牌。
-                </Text>
-                {config.probes.map((probe, index) => (
-                  <Group key={probe.id} align="end" grow>
-                    <TextInput
-                      label="显示名称"
-                      value={probe.name ?? ''}
-                      placeholder={probe.defaultName ?? probeName(probe, index)}
-                      onChange={(e) => {
-                        const name = e.currentTarget.value
-                        setConfig({
-                          ...config,
-                          probes: config.probes.map((p, i) => (i === index ? { ...p, name } : p)),
-                        })
-                      }}
-                    />
-                    <TextInput
-                      label="地区 / 运营商"
-                      value={probe.location ?? ''}
-                      placeholder={probe.defaultLocation ?? ''}
-                      onChange={(e) => {
-                        const location = e.currentTarget.value
-                        setConfig({
-                          ...config,
-                          probes: config.probes.map((p, i) =>
-                            i === index ? { ...p, location } : p
-                          ),
-                        })
-                      }}
-                    />
-                  </Group>
-                ))}
-                <NumberInput
-                  label="离线超时（秒）"
-                  min={300}
-                  max={86400}
-                  value={config.probeStaleAfterSeconds ?? 900}
-                  onChange={(v) => setConfig({ ...config, probeStaleAfterSeconds: Number(v) })}
-                />
-              </Stack>
-            </Paper>
-            <Group justify="space-between">
-              <Title order={3}>通知模板</Title>
-              <Button
-                variant="light"
-                onClick={() =>
-                  setConfig({
-                    ...config,
-                    notificationTemplates: [
-                      ...(config.notificationTemplates ?? []),
-                      {
-                        id: createInternalId(
-                          'template',
-                          new Set(
-                            (config.notificationTemplates ?? []).map((template) => template.id)
-                          )
-                        ),
-                        name: '新模板',
-                        type: 'webhook',
-                        webhook: {
-                          url: 'https://',
-                          method: 'POST',
-                          payloadType: 'json',
-                          payload: { text: '$MSG' },
-                          timeout: 5000,
-                        },
-                      },
-                    ],
-                  })
-                }
-              >
-                添加模板
-              </Button>
-            </Group>
-            {(config.notificationTemplates ?? []).map((template, index) => (
-              <NotificationTemplateEditor
-                key={template.id}
-                template={template}
-                draft={webhookDrafts[template.id]}
-                onChange={(patch: Partial<NotificationTemplate>) =>
-                  setConfig({
-                    ...config,
-                    notificationTemplates: (config.notificationTemplates ?? []).map(
-                      (item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)
-                    ),
-                  })
-                }
-                onDraftChange={(patch) =>
-                  setWebhookDrafts((old) => ({
-                    ...old,
-                    [template.id]: { ...old[template.id], ...patch },
-                  }))
-                }
-                onRemove={() => {
-                  if (window.confirm('删除此模板并关闭使用它的目标通知？'))
-                    setConfig({
-                      ...config,
-                      notificationTemplates: (config.notificationTemplates ?? []).filter(
-                        (item) => item.id !== template.id
-                      ),
-                      monitors: config.monitors.map((monitor) =>
-                        monitor.notificationTemplateId === template.id
-                          ? { ...monitor, notificationTemplateId: undefined }
-                          : monitor
-                      ),
-                    })
-                }}
-              />
-            ))}
-            <Group justify="space-between">
-              <Title order={3}>监控目标</Title>
-              <Button
-                variant="light"
-                onClick={() =>
-                  setConfig({
-                    ...config,
-                    monitors: [
-                      ...config.monitors,
-                      {
-                        id: createInternalId(
-                          'monitor',
-                          new Set(config.monitors.map((monitor) => monitor.id))
-                        ),
-                        name: '新目标',
-                        target: 'https://',
-                        method: 'GET',
-                        probes: config.probes.map((p) => p.id),
-                        timeout: 10000,
-                      },
-                    ],
-                  })
-                }
-              >
-                添加目标
-              </Button>
-            </Group>
-            {config.monitors.map((monitor, index) => {
-              const {
-                id,
-                name,
-                target,
-                method,
-                probes,
-                timeout,
-                notificationTemplateId,
-                ...extras
-              } = monitor
-              return (
-                <Paper withBorder p="md" key={id}>
+            <Tabs defaultValue="monitors" keepMounted={false}>
+              <Tabs.List grow aria-label="配置板块">
+                <Tabs.Tab value="monitors">监控目标</Tabs.Tab>
+                <Tabs.Tab value="probes">探针</Tabs.Tab>
+                <Tabs.Tab value="notifications">通知模板</Tabs.Tab>
+              </Tabs.List>
+              <Tabs.Panel value="probes" pt="md">
+                <Paper withBorder p="md">
                   <Stack>
-                    <Group justify="space-between">
-                      <Text fw={600}>{name}</Text>
-                      <Button
-                        color="red"
-                        variant="subtle"
-                        onClick={() => {
-                          if (window.confirm('确认删除此目标？'))
+                    <Title order={3}>探针</Title>
+                    <Text size="sm" c="dimmed">
+                      Cloudflare 为内置探针，无需令牌。独立探针的默认名称为公网 IP 归属地与 ASN。
+                      名称留空使用自动命名；手动填写可覆盖。新增独立探针需要先配置服务端令牌。
+                    </Text>
+                    {config.probes.map((probe, index) => (
+                      <Group key={probe.id} align="end" grow>
+                        <TextInput
+                          label="显示名称"
+                          value={probe.name ?? ''}
+                          placeholder={probe.defaultName ?? probeName(probe, index)}
+                          onChange={(e) => {
+                            const name = e.currentTarget.value
                             setConfig({
                               ...config,
-                              monitors: config.monitors.filter((_, i) => i !== index),
+                              probes: config.probes.map((p, i) =>
+                                i === index ? { ...p, name } : p
+                              ),
                             })
-                        }}
-                      >
-                        删除
-                      </Button>
-                    </Group>
-                    <Group grow>
-                      <TextInput
-                        label="名称"
-                        value={name}
-                        onChange={(e) => updateMonitor(index, { name: e.currentTarget.value })}
-                      />
-                    </Group>
-                    <Group grow>
-                      <Select
-                        label="检测方法"
-                        data={[
-                          'GET',
-                          'HEAD',
-                          'POST',
-                          'PUT',
-                          'PATCH',
-                          'DELETE',
-                          'OPTIONS',
-                          'TCP_PING',
-                        ]}
-                        value={method}
-                        onChange={(v) => updateMonitor(index, { method: v ?? 'GET' })}
-                      />
-                      <NumberInput
-                        label="超时（毫秒）"
-                        min={1}
-                        max={120000}
-                        value={timeout ?? 10000}
-                        onChange={(v) => updateMonitor(index, { timeout: Number(v) })}
-                      />
-                    </Group>
-                    <TextInput
-                      label={method === 'TCP_PING' ? '目标 host:port' : '目标 URL'}
-                      value={target}
-                      onChange={(e) => updateMonitor(index, { target: e.currentTarget.value })}
+                          }}
+                        />
+                        <TextInput
+                          label="地区 / 运营商"
+                          value={probe.location ?? ''}
+                          placeholder={probe.defaultLocation ?? ''}
+                          onChange={(e) => {
+                            const location = e.currentTarget.value
+                            setConfig({
+                              ...config,
+                              probes: config.probes.map((p, i) =>
+                                i === index ? { ...p, location } : p
+                              ),
+                            })
+                          }}
+                        />
+                      </Group>
+                    ))}
+                    <NumberInput
+                      label="离线超时（秒）"
+                      min={300}
+                      max={86400}
+                      value={config.probeStaleAfterSeconds ?? 900}
+                      onChange={(v) => setConfig({ ...config, probeStaleAfterSeconds: Number(v) })}
                     />
-                    <MultiSelect
-                      label="执行探针"
-                      data={optionLabels(config.probes, probeName)}
-                      value={probes ?? []}
-                      onChange={(v) => updateMonitor(index, { probes: v })}
-                    />
-                    <Select
-                      label="通知模板"
-                      placeholder="关闭通知"
-                      clearable
-                      data={optionLabels(
-                        config.notificationTemplates ?? [],
-                        (template) => template.name || '未命名模板'
-                      )}
-                      value={notificationTemplateId ?? null}
-                      onChange={(value) =>
-                        updateMonitor(index, { notificationTemplateId: value ?? undefined })
-                      }
-                    />
-                    <details>
-                      <summary style={{ cursor: 'pointer' }}>附加设置</summary>
-                      <Textarea
-                        mt="sm"
-                        label="JSON"
-                        autosize
-                        minRows={4}
-                        maxRows={16}
-                        value={advanced[id] ?? JSON.stringify(extras, null, 2)}
-                        onChange={(e) => setAdvanced({ ...advanced, [id]: e.currentTarget.value })}
-                      />
-                    </details>
                   </Stack>
                 </Paper>
-              )
-            })}
+              </Tabs.Panel>
+              <Tabs.Panel value="notifications" pt="md">
+                <Stack>
+                  <Group justify="space-between">
+                    <Title order={3}>通知模板</Title>
+                    <Button
+                      variant="light"
+                      onClick={() =>
+                        setConfig({
+                          ...config,
+                          notificationTemplates: [
+                            ...(config.notificationTemplates ?? []),
+                            {
+                              id: createInternalId(
+                                'template',
+                                new Set(
+                                  (config.notificationTemplates ?? []).map(
+                                    (template) => template.id
+                                  )
+                                )
+                              ),
+                              name: '新模板',
+                              type: 'webhook',
+                              webhook: {
+                                url: 'https://',
+                                method: 'POST',
+                                payloadType: 'json',
+                                payload: { text: '$MSG' },
+                                timeout: 5000,
+                              },
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      添加模板
+                    </Button>
+                  </Group>
+                  {(config.notificationTemplates ?? []).map((template, index) => (
+                    <NotificationTemplateEditor
+                      key={template.id}
+                      template={template}
+                      draft={webhookDrafts[template.id]}
+                      onChange={(patch: Partial<NotificationTemplate>) =>
+                        setConfig({
+                          ...config,
+                          notificationTemplates: (config.notificationTemplates ?? []).map(
+                            (item, itemIndex) =>
+                              itemIndex === index ? { ...item, ...patch } : item
+                          ),
+                        })
+                      }
+                      onDraftChange={(patch) =>
+                        setWebhookDrafts((old) => ({
+                          ...old,
+                          [template.id]: { ...old[template.id], ...patch },
+                        }))
+                      }
+                      onRemove={() => {
+                        if (window.confirm('删除此模板并关闭使用它的目标通知？'))
+                          setConfig({
+                            ...config,
+                            notificationTemplates: (config.notificationTemplates ?? []).filter(
+                              (item) => item.id !== template.id
+                            ),
+                            monitors: config.monitors.map((monitor) =>
+                              monitor.notificationTemplateId === template.id
+                                ? { ...monitor, notificationTemplateId: undefined }
+                                : monitor
+                            ),
+                          })
+                      }}
+                    />
+                  ))}
+                </Stack>
+              </Tabs.Panel>
+              <Tabs.Panel value="monitors" pt="md">
+                <Stack>
+                  <Group justify="space-between">
+                    <Title order={3}>监控目标</Title>
+                    <Button
+                      variant="light"
+                      onClick={() =>
+                        setConfig({
+                          ...config,
+                          monitors: [
+                            ...config.monitors,
+                            {
+                              id: createInternalId(
+                                'monitor',
+                                new Set(config.monitors.map((monitor) => monitor.id))
+                              ),
+                              name: '新目标',
+                              target: 'https://',
+                              method: 'GET',
+                              probes: config.probes.map((p) => p.id),
+                              timeout: 10000,
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      添加目标
+                    </Button>
+                  </Group>
+                  {config.monitors.map((monitor, index) => {
+                    const {
+                      id,
+                      name,
+                      target,
+                      method,
+                      probes,
+                      timeout,
+                      notificationTemplateId,
+                      ...extras
+                    } = monitor
+                    return (
+                      <Paper withBorder p="md" key={id}>
+                        <Stack>
+                          <Group justify="space-between">
+                            <Text fw={600}>{name}</Text>
+                            <Button
+                              color="red"
+                              variant="subtle"
+                              onClick={() => {
+                                if (window.confirm('确认删除此目标？'))
+                                  setConfig({
+                                    ...config,
+                                    monitors: config.monitors.filter((_, i) => i !== index),
+                                  })
+                              }}
+                            >
+                              删除
+                            </Button>
+                          </Group>
+                          <Group grow>
+                            <TextInput
+                              label="名称"
+                              value={name}
+                              onChange={(e) =>
+                                updateMonitor(index, { name: e.currentTarget.value })
+                              }
+                            />
+                          </Group>
+                          <Group grow>
+                            <Select
+                              label="检测方法"
+                              data={[
+                                'GET',
+                                'HEAD',
+                                'POST',
+                                'PUT',
+                                'PATCH',
+                                'DELETE',
+                                'OPTIONS',
+                                'TCP_PING',
+                              ]}
+                              value={method}
+                              onChange={(v) => updateMonitor(index, { method: v ?? 'GET' })}
+                            />
+                            <NumberInput
+                              label="超时（毫秒）"
+                              min={1}
+                              max={120000}
+                              value={timeout ?? 10000}
+                              onChange={(v) => updateMonitor(index, { timeout: Number(v) })}
+                            />
+                          </Group>
+                          <TextInput
+                            label={method === 'TCP_PING' ? '目标 host:port' : '目标 URL'}
+                            value={target}
+                            onChange={(e) =>
+                              updateMonitor(index, { target: e.currentTarget.value })
+                            }
+                          />
+                          <MultiSelect
+                            label="执行探针"
+                            data={optionLabels(config.probes, probeName)}
+                            value={probes ?? []}
+                            onChange={(v) => updateMonitor(index, { probes: v })}
+                          />
+                          <Select
+                            label="通知模板"
+                            placeholder="关闭通知"
+                            clearable
+                            data={optionLabels(
+                              config.notificationTemplates ?? [],
+                              (template) => template.name || '未命名模板'
+                            )}
+                            value={notificationTemplateId ?? null}
+                            onChange={(value) =>
+                              updateMonitor(index, { notificationTemplateId: value ?? undefined })
+                            }
+                          />
+                          <details>
+                            <summary style={{ cursor: 'pointer' }}>附加设置</summary>
+                            <Textarea
+                              mt="sm"
+                              label="JSON"
+                              autosize
+                              minRows={4}
+                              maxRows={16}
+                              value={advanced[id] ?? JSON.stringify(extras, null, 2)}
+                              onChange={(e) =>
+                                setAdvanced({ ...advanced, [id]: e.currentTarget.value })
+                              }
+                            />
+                          </details>
+                        </Stack>
+                      </Paper>
+                    )
+                  })}
+                </Stack>
+              </Tabs.Panel>
+            </Tabs>
             <Button size="md" loading={busy} onClick={() => void action(save)}>
               保存配置
             </Button>
