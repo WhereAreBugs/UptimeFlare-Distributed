@@ -1,4 +1,4 @@
-import { Accordion, Badge, Group, Stack, Table, Text, Tooltip } from '@mantine/core'
+import { Accordion, Badge, Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core'
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -9,7 +9,14 @@ import { useTranslation } from 'react-i18next'
 import { useState } from 'react'
 import type { MonitorTarget } from '@/types/config'
 import type { ProbeMonitorSummary, ProbeSummary } from '@/types/probes'
-import { refreshProbeSummary, statusColors, type MonitorStatus } from '@/util/probe-status'
+import {
+  refreshProbeSummary,
+  statusColors,
+  summarizeProbeHistory,
+  type MonitorStatus,
+} from '@/util/probe-status'
+
+const historyColors = { ...statusColors, degraded: '#eab308' }
 
 const statusLabels: Record<MonitorStatus, string> = {
   up: 'Probe operational',
@@ -45,41 +52,46 @@ function emptyProbe(id: string): ProbeSummary {
   }
 }
 
-function ProbeHistory({ probe, now }: { probe: ProbeSummary; now: number }) {
+function ProbeHistory({
+  probes,
+  name,
+  now,
+}: {
+  probes: ProbeSummary[]
+  name: string
+  now: number
+}) {
   const { t } = useTranslation('common')
-  const buckets = new Map(probe.history.map((bucket) => [bucket.time, bucket]))
-  const end = Math.floor(now / 300) * 300
+  const buckets = summarizeProbeHistory(probes, now)
   return (
     <div>
-      <Text size="sm" fw={500} mb={6}>
-        {t('Probe five minute history')}
-      </Text>
       <div
         style={{ display: 'flex', gap: 2, height: 24 }}
-        aria-label={t('Probe five minute history')}
+        role="group"
+        aria-label={`${name} · ${t('Probe history')}`}
       >
-        {Array.from({ length: 144 }, (_, index) => {
-          const time = end - (143 - index) * 300
-          const bucket = buckets.get(time)
-          const status = !bucket?.checks
-            ? 'unknown'
-            : bucket.failures === 0
-            ? 'up'
-            : bucket.failures === bucket.checks
-            ? 'down'
-            : 'degraded'
-          const label = `${new Date(time * 1000).toLocaleString()}: ${
-            bucket?.checks
+        {buckets.map((bucket) => {
+          const label = `${new Date(bucket.time * 1000).toLocaleString()}: ${t(
+            statusLabels[bucket.status]
+          )} · ${
+            bucket.checks
               ? t('Probe bucket detail', {
                   checks: bucket.checks,
                   failures: bucket.failures,
                   latency: bucket.avgLatencyMs?.toFixed(1) ?? '—',
                 })
               : t('Probe no samples')
+          }${
+            probes.length > 1
+              ? ` · ${t('Probe history coverage', {
+                  reported: bucket.reported,
+                  total: bucket.total,
+                })}`
+              : ''
           }`
           return (
             <Tooltip
-              key={time}
+              key={bucket.time}
               label={label}
               multiline
               events={{ hover: true, focus: true, touch: true }}
@@ -88,7 +100,12 @@ function ProbeHistory({ probe, now }: { probe: ProbeSummary; now: number }) {
                 tabIndex={0}
                 role="img"
                 aria-label={label}
-                style={{ flex: 1, minWidth: 1, borderRadius: 2, background: statusColors[status] }}
+                style={{
+                  flex: 1,
+                  minWidth: 1,
+                  borderRadius: 2,
+                  background: historyColors[bucket.status],
+                }}
               />
             </Tooltip>
           )
@@ -158,7 +175,7 @@ function ProbeDetails({
       </Group>
       <div>
         <Text size="sm" fw={500} mb={5}>
-          {t('Probe failure stages')}
+          {t('Probe failure statistics')}
         </Text>
         <Group gap="xs">
           {Object.entries(probe.failureStages).map(([stage, count]) => (
@@ -173,7 +190,7 @@ function ProbeDetails({
           )}
         </Group>
       </div>
-      <ProbeHistory probe={probe} now={now} />
+      <ProbeHistory probes={[probe]} name={probe.name} now={now} />
       {!!probe.recentFailures.length && (
         <details onToggle={(event) => setShowFailures(event.currentTarget.open)}>
           <summary style={{ cursor: 'pointer', fontSize: 14 }}>
@@ -258,20 +275,23 @@ export default function ProbeMonitorDetail({
             </Group>
           </Group>
         </Accordion.Control>
+        <Box px="md" pb="sm">
+          <ProbeHistory probes={probes} name={monitor.name} now={now} />
+        </Box>
         <Accordion.Panel>
           {expandedMonitor === monitor.id && (
             <>
-              <Text size="sm" c="dimmed" mb="sm">
-                {t(
-                  status === 'up'
-                    ? 'Probe all reachable'
-                    : status === 'down'
-                    ? 'Probe all unreachable'
-                    : status === 'degraded'
-                    ? 'Probe mixed explanation'
-                    : 'Probe unknown explanation'
-                )}
-              </Text>
+              {status !== 'up' && (
+                <Text size="sm" c="dimmed" mb="sm">
+                  {t(
+                    status === 'down'
+                      ? 'Probe all unreachable'
+                      : status === 'degraded'
+                      ? 'Probe mixed explanation'
+                      : 'Probe unknown explanation'
+                  )}
+                </Text>
+              )}
               {monitor.statusPageLink && (
                 <Text size="sm" mb="sm">
                   <a href={monitor.statusPageLink} target="_blank" rel="noreferrer">

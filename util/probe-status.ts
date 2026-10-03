@@ -1,5 +1,5 @@
 import type { MonitorState, MonitorTarget } from '../types/config'
-import type { ProbeMonitorSummary } from '../types/probes'
+import type { ProbeHistoryBucket, ProbeMonitorSummary, ProbeSummary } from '../types/probes'
 
 export type MonitorStatus = 'up' | 'degraded' | 'down' | 'unknown'
 
@@ -16,6 +16,64 @@ export function aggregateStatus(up: number, down: number, unknown: number): Moni
   if (up === total) return 'up'
   if (down === total) return 'down'
   return 'degraded'
+}
+
+export type MonitorHistoryBucket = ProbeHistoryBucket & {
+  status: MonitorStatus
+  reported: number
+  total: number
+}
+
+// Each assigned probe has equal weight in the color, regardless of its check interval.
+// Missing evidence cannot turn a partially observed interval green or red.
+export function summarizeProbeHistory(
+  probes: Pick<ProbeSummary, 'history'>[],
+  now: number
+): MonitorHistoryBucket[] {
+  const histories = probes.map(
+    (probe) => new Map(probe.history.map((bucket) => [bucket.time, bucket]))
+  )
+  const end = Math.floor(now / 300) * 300
+  return Array.from({ length: 144 }, (_, index) => {
+    const time = end - (143 - index) * 300
+    let up = 0
+    let down = 0
+    let reported = 0
+    let checks = 0
+    let failures = 0
+    let latencySum = 0
+    let latencyChecks = 0
+    for (const history of histories) {
+      const bucket = history.get(time)
+      if (!bucket?.checks) continue
+      reported++
+      checks += bucket.checks
+      failures += bucket.failures
+      if (bucket.failures === 0) up++
+      else if (bucket.failures === bucket.checks) down++
+      if (bucket.avgLatencyMs !== null) {
+        latencySum += bucket.avgLatencyMs * bucket.checks
+        latencyChecks += bucket.checks
+      }
+    }
+    const status: MonitorStatus =
+      reported === 0
+        ? 'unknown'
+        : up === probes.length
+        ? 'up'
+        : down === probes.length
+        ? 'down'
+        : 'degraded'
+    return {
+      time,
+      status,
+      reported,
+      total: probes.length,
+      checks,
+      failures,
+      avgLatencyMs: latencyChecks ? latencySum / latencyChecks : null,
+    }
+  })
 }
 
 // Recheck freshness while a page is open: stale success must never remain green.

@@ -14,7 +14,13 @@ const loaded = new Module(filename, module)
 loaded.filename = filename
 loaded.paths = module.paths
 loaded._compile(compiled, filename)
-const { aggregateStatus, refreshProbeSummary, getMonitorStatus, summarizeMonitors } = loaded.exports
+const {
+  aggregateStatus,
+  refreshProbeSummary,
+  getMonitorStatus,
+  summarizeMonitors,
+  summarizeProbeHistory,
+} = loaded.exports
 
 const emptyState = { lastUpdate: 0, overallUp: 0, overallDown: 0, incident: {}, latency: {} }
 const native = { id: 'native', name: 'Native', method: 'GET', target: 'https://example.test' }
@@ -102,4 +108,48 @@ test('overall counts combine native and external monitors without treating missi
     total: 3,
     lastUpdate: 1100,
   })
+})
+
+test('history colors require agreement from every probe despite unequal check intervals', () => {
+  const now = 1_800_123
+  const time = 1_800_000
+  const history = (checks, failures, avgLatencyMs = 20) => ({
+    history: [{ time, checks, failures, avgLatencyMs }],
+  })
+  const latest = (probes) => summarizeProbeHistory(probes, now).at(-1)
+  assert.equal(latest([history(30, 0), history(5, 0)]).status, 'up')
+  assert.equal(latest([history(30, 30), history(5, 5)]).status, 'down')
+  assert.equal(latest([history(30, 0), history(5, 5)]).status, 'degraded')
+  assert.equal(latest([history(30, 1), history(5, 0)]).status, 'degraded')
+  assert.equal(latest([history(30, 0), { history: [] }]).status, 'degraded')
+  assert.equal(latest([history(30, 30), { history: [] }]).status, 'degraded')
+  assert.equal(latest([{ history: [] }, history(0, 0)]).status, 'unknown')
+  assert.equal(latest([]).status, 'unknown')
+  assert.equal(latest([history(30, 1)]).status, 'degraded')
+})
+
+test('history aggregates counts and weighted latency into aligned five-minute intervals', () => {
+  const time = 1_800_000
+  const buckets = summarizeProbeHistory(
+    [
+      { history: [{ time, checks: 30, failures: 0, avgLatencyMs: 20 }] },
+      { history: [{ time, checks: 5, failures: 1, avgLatencyMs: 60 }] },
+      { history: [{ time: time - 300, checks: 1, failures: 0, avgLatencyMs: null }] },
+    ],
+    time + 299
+  )
+  assert.equal(buckets.length, 144)
+  assert.equal(buckets[0].time, time - 143 * 300)
+  assert.deepEqual(buckets.at(-1), {
+    time,
+    status: 'degraded',
+    reported: 2,
+    total: 3,
+    checks: 35,
+    failures: 1,
+    avgLatencyMs: 900 / 35,
+  })
+  assert.equal(buckets.at(-2).avgLatencyMs, null)
+  assert.equal(buckets.at(-2).reported, 1)
+  assert.equal(summarizeProbeHistory([], time + 300).at(-1).time, time + 300)
 })
