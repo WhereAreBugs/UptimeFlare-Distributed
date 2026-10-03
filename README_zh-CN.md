@@ -5,6 +5,8 @@
 
 # ✔[UptimeFlare](https://github.com/lyc8503/UptimeFlare)
 
+本分支新增独立 Go 探针、持久化结果与压缩批量上传，以及可展开的多探针汇总。请参阅[外部探针配置与部署](docs/external-probes.md)。
+
 一个由 Cloudflare Workers 驱动的功能丰富、Serverless 且免费的 Uptime 监控及状态页面。
 
 ## ⭐功能

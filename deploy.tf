@@ -21,6 +21,13 @@ variable "enable_do_migration" {
   default = false
 }
 
+variable "probe_tokens" {
+  description = "JSON object of probe IDs to independent bearer tokens; supplied from GitHub PROBE_TOKENS secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 resource "cloudflare_d1_database" "uptimeflare_d1" {
   account_id            = var.CLOUDFLARE_ACCOUNT_ID
   name                  = "uptimeflare_d1"
@@ -51,7 +58,7 @@ resource "cloudflare_workers_script" "uptimeflare_worker" {
     new_sqlite_classes = ["RemoteChecker"]
   } : null
 
-  bindings = [{
+  bindings = concat([{
     name       = "REMOTE_CHECKER_DO"
     class_name = "RemoteChecker"
     type       = "durable_object_namespace"
@@ -59,7 +66,11 @@ resource "cloudflare_workers_script" "uptimeflare_worker" {
     name = "UPTIMEFLARE_D1"
     type = "d1"
     id   = cloudflare_d1_database.uptimeflare_d1.id
-  }]
+  }], var.probe_tokens == "" ? [] : [{
+    name = "PROBE_TOKENS"
+    type = "secret_text"
+    text = var.probe_tokens
+  }])
 }
 
 resource "cloudflare_workers_cron_trigger" "uptimeflare_worker_cron" {
@@ -81,6 +92,12 @@ resource "cloudflare_pages_project" "uptimeflare" {
       fail_open = false
     }
     production = {
+      env_vars = var.probe_tokens == "" ? {} : {
+        PROBE_TOKENS = {
+          type  = "secret_text"
+          value = var.probe_tokens
+        }
+      }
       d1_databases = {
         UPTIMEFLARE_D1 = {
           id = cloudflare_d1_database.uptimeflare_d1.id

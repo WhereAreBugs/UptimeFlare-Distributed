@@ -31,6 +31,10 @@ const pageConfig: PageConfig = {
 }
 
 const workerConfig: WorkerConfig = {
+  // Optional external Go probes; tokens belong in the PROBE_TOKENS secret, never this file.
+  // Setup: docs/external-probes.md
+  // probes: [{ id: 'sg', name: 'Singapore', location: 'Singapore / ISP A' }],
+  // probeStaleAfterSeconds: 900,
   // [Optional] Write KV at most every N minutes unless the status changed, default to 3
   kvWriteCooldownMinutes: 3,
   // Enable HTTP Basic auth for status page & API by uncommenting the line below, format `<USERNAME>:<PASSWORD>`
@@ -41,6 +45,8 @@ const workerConfig: WorkerConfig = {
     {
       // `id` should be unique, history will be kept if the `id` remains constant
       id: 'foo_monitor',
+      // Optional: assigning probes disables native scheduled checks for this target.
+      // probes: ['sg'],
       // `name` is used at status page and callback message
       name: 'My API Monitor',
       // `method` should be a valid HTTP Method
