@@ -1,6 +1,7 @@
-import { maintenances, workerConfig } from '@/uptime.config'
+import { maintenances, workerConfig as fallbackConfig } from '@/uptime.config'
 import { NextRequest } from 'next/server'
 import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
+import { getRuntimeConfig } from '@/worker/src/settings'
 import { getProbeSummaries } from '@/worker/src/probes'
 import { parseNativeDiagnostic } from '@/worker/src/diagnostics'
 
@@ -21,6 +22,7 @@ export default async function handler(req: NextRequest): Promise<Response> {
       status: 405,
       headers: { ...headers, Allow: 'GET, OPTIONS' },
     })
+  const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
   const [stateStr, probeSummaries] = await Promise.all([
     getFromStore(process.env as any, 'state'),
     getProbeSummaries(

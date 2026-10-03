@@ -208,7 +208,9 @@ export default function IncidentsPage({
 }
 
 export async function getServerSideProps() {
-  const { workerConfig } = await import('@/uptime.config')
+  const { workerConfig: fallbackConfig } = await import('@/uptime.config')
+  const { getRuntimeConfig } = await import('@/worker/src/settings')
+  const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
   // Only present these values to client
   const monitors: MonitorTarget[] = workerConfig.monitors.map((monitor) => ({
     id: monitor.id,

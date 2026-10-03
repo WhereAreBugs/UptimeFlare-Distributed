@@ -3,9 +3,11 @@ import classes from '@/styles/Header.module.css'
 import { pageConfig } from '@/uptime.config'
 import { PageConfigLink } from '@/types/config'
 import { useTranslation } from 'react-i18next'
+import { useRouter } from 'next/router'
 
 export default function Header({ style }: { style?: React.CSSProperties }) {
   const { t } = useTranslation('common')
+  const { pathname } = useRouter()
   const linkToElement = (link: PageConfigLink, i: number) => {
     return (
       <a
@@ -27,8 +29,10 @@ export default function Header({ style }: { style?: React.CSSProperties }) {
       <Container size="md" className={classes.inner}>
         <div>
           <a
-            href={location.pathname == '/' ? 'https://github.com/lyc8503/UptimeFlare' : '/'}
-            target={location.pathname == '/' ? '_blank' : undefined}
+            href={
+              pathname === '/' ? 'https://github.com/WhereAreBugs/UptimeFlare-Distributed' : '/'
+            }
+            target={pathname === '/' ? '_blank' : undefined}
           >
             <Image
               src={pageConfig.logo ?? '/logo.svg'}

@@ -47,7 +47,9 @@ export default async function handler(req: NextRequest): Promise<Response> {
       })
     }
 
-    const { workerConfig } = await import('@/uptime.config')
+    const { workerConfig: fallbackConfig } = await import('@/uptime.config')
+    const { getRuntimeConfig } = await import('@/worker/src/settings')
+    const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
     const monitor = workerConfig.monitors.find((monitor) => monitor.id === monitorId)
     if (!monitor)
       return new Response(JSON.stringify(errorBadge(label, 'monitor-not-found')), {

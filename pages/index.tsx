@@ -101,7 +101,9 @@ export default function Home({
 }
 
 export async function getServerSideProps() {
-  const { workerConfig } = await import('@/uptime.config')
+  const { workerConfig: fallbackConfig } = await import('@/uptime.config')
+  const { getRuntimeConfig } = await import('@/worker/src/settings')
+  const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
   // Read state as string from storage, to avoid hitting server-side cpu time limit
   const [compactedStateStr, probeSummaries] = await Promise.all([
     getFromStore(process.env as any, 'state'),

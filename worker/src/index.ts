@@ -1,25 +1,43 @@
 import { DurableObject } from 'cloudflare:workers'
 import { MonitorTarget } from '../../types/config'
-import { workerConfig } from '../../uptime.config'
+import { workerConfig as fallbackConfig } from '../../uptime.config'
 import { doMonitor, getStatus } from './monitor'
 import { formatAndNotify, getWorkerLocation } from './util'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import pLimit from 'p-limit'
 import { handleProbeRequest, cleanupProbeResults } from './probes'
+import { getRuntimeConfig } from './settings'
+import { handleAdminRequest } from './admin'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
   UPTIMEFLARE_D1: D1Database
   PROBE_TOKENS?: string
+  ADMIN_PASSWORD?: string
+  ADMIN_SESSION_SECRET?: string
 }
 
 const Worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith('/api/admin/'))
+      return handleAdminRequest(request, env, fallbackConfig)
+    const workerConfig = await getRuntimeConfig(env, fallbackConfig)
     return handleProbeRequest(request, env, workerConfig.monitors)
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(cleanupProbeResults(env).catch(() => console.error('Probe retention cleanup failed')))
-    const nativeMonitors = workerConfig.monitors.filter(monitor => !monitor.probes?.length)
+    ctx.waitUntil(
+      cleanupProbeResults(env).catch(() => console.error('Probe retention cleanup failed'))
+    )
+    const workerConfig = await getRuntimeConfig(env, fallbackConfig)
+    ctx.waitUntil(
+      env.UPTIMEFLARE_D1.prepare(
+        'DELETE FROM admin_login_attempts WHERE address IN (SELECT address FROM admin_login_attempts WHERE window < ? LIMIT 1000)'
+      )
+        .bind(Math.floor(Date.now() / 1000 / 900) - 2)
+        .run()
+        .catch(() => console.error('Admin login cleanup failed'))
+    )
+    const nativeMonitors = workerConfig.monitors.filter((monitor) => !monitor.probes?.length)
     if (!nativeMonitors.length) return
     const workerLocation = (await getWorkerLocation()) || 'ERROR'
     console.log(`Running scheduled event on ${workerLocation}...`)
@@ -34,10 +52,14 @@ const Worker = {
 
     // Parallel check multiple monitors
     // Max concurrent connection is 6 limited by Cloudflare Workers, we use 5 here to be safe
-    type CheckResult = { id: string; location: string; status: { ping: number; up: boolean; err: string } }
+    type CheckResult = {
+      id: string
+      location: string
+      status: { ping: number; up: boolean; err: string }
+    }
     let checkQueue: Promise<CheckResult>[] = []
-    let checkResult: Record<string, CheckResult> = {};
-    const limit = pLimit(5);
+    let checkResult: Record<string, CheckResult> = {}
+    const limit = pLimit(5)
     for (const monitor of nativeMonitors) {
       checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
     }

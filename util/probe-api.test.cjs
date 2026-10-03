@@ -37,6 +37,7 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
   }
   const mocks = {
     '@/worker/src/diagnostics': diagnosticModule.exports,
+    '@/worker/src/settings': { getRuntimeConfig: async () => workerConfig },
     '@/uptime.config': { workerConfig, maintenances: [] },
     '@/worker/src/probes': {
       getProbeSummaries: async () => {
