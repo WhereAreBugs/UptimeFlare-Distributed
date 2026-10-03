@@ -250,9 +250,7 @@ export default function ProbeMonitorDetail({
   const probes = current?.probes ?? monitor.probes?.map(emptyProbe) ?? []
   const totals = {
     up: current?.up ?? 0,
-    down: current?.down ?? 0,
-    unknown: current?.unknown ?? probes.length,
-    total: probes.length,
+    total: (current?.up ?? 0) + (current?.down ?? 0),
   }
   return (
     <Accordion variant="default" mt="sm" value={expandedMonitor} onChange={setExpandedMonitor}>

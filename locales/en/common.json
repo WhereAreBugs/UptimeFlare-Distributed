@@ -42,7 +42,7 @@
   "Probe unknown": "Unknown",
   "Probe stale": "Stale probe data",
   "Probe never reported": "No probe data yet",
-  "Probe summary counts": "{{up}} reachable · {{down}} unreachable · {{unknown}} unknown / {{total}} probes",
+  "Probe summary counts": "{{up}}/{{total}}",
   "Probe all unreachable": "All probes with fresh results cannot reach this host.",
   "Probe mixed explanation": "Probes with fresh results disagree. Expand each probe to compare.",
   "Probe unknown explanation": "No fresh results from assigned probes. This does not establish that the host is unreachable.",

@@ -42,7 +42,7 @@
   "Probe unknown": "状态未知",
   "Probe stale": "探针数据过期",
   "Probe never reported": "探针尚未上报",
-  "Probe summary counts": "{{up}} 可达 · {{down}} 不可达 · {{unknown}} 未知 / {{total}} 个探针",
+  "Probe summary counts": "{{up}}/{{total}}",
   "Probe all unreachable": "有最新结果的探针均无法连接此主机。",
   "Probe mixed explanation": "有最新结果的探针结果不一致。展开各探针可查看独立结果。",
   "Probe unknown explanation": "指定探针均无有效的新结果，不能据此判定主机不可达。",
