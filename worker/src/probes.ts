@@ -7,6 +7,7 @@ import type {
   ProbeSummary,
 } from '../../types/probes'
 import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './probe-labels'
+import { aggregateStatus } from '../../util/probe-status'
 
 export interface ProbeEnv {
   UPTIMEFLARE_D1: D1Database
@@ -529,14 +530,7 @@ export async function getProbeSummaries(
     const latestTimes = probes.flatMap((p) => (p.latest === null ? [] : [p.latest]))
     summaries[monitor.id] = {
       monitorId: monitor.id,
-      status:
-        up === probes.length
-          ? 'up'
-          : down === probes.length
-          ? 'down'
-          : unknown === probes.length
-          ? 'unknown'
-          : 'degraded',
+      status: aggregateStatus(up, down, unknown),
       up,
       down,
       unknown,

@@ -10,11 +10,16 @@ export const statusColors: Record<MonitorStatus, string> = {
   unknown: '#70778c',
 }
 
-export function aggregateStatus(up: number, down: number, unknown: number): MonitorStatus {
-  const total = up + down + unknown
+export function aggregateStatus(
+  up: number,
+  down: number,
+  unknown: number,
+  degraded = 0
+): MonitorStatus {
+  const total = up + down + unknown + degraded
   if (total === 0 || unknown === total) return 'unknown'
-  if (up === total) return 'up'
-  if (down === total) return 'down'
+  if (up === total - unknown) return 'up'
+  if (down === total - unknown) return 'down'
   return 'degraded'
 }
 
@@ -24,8 +29,8 @@ export type MonitorHistoryBucket = ProbeHistoryBucket & {
   total: number
 }
 
-// Each assigned probe has equal weight in the color, regardless of its check interval.
-// Missing evidence cannot turn a partially observed interval green or red.
+// Only probes with samples affect the color; missing data stays visible in coverage.
+// Reporting probes have equal weight, regardless of their check intervals.
 export function summarizeProbeHistory(
   probes: Pick<ProbeSummary, 'history'>[],
   now: number
@@ -57,13 +62,7 @@ export function summarizeProbeHistory(
       }
     }
     const status: MonitorStatus =
-      reported === 0
-        ? 'unknown'
-        : up === probes.length
-        ? 'up'
-        : down === probes.length
-        ? 'down'
-        : 'degraded'
+      reported === 0 ? 'unknown' : up === reported ? 'up' : down === reported ? 'down' : 'degraded'
     return {
       time,
       status,

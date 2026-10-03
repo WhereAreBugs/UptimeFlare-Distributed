@@ -50,17 +50,20 @@ const makeSummary = (probes) => ({
   probes,
 })
 
-test('aggregation distinguishes all failures, partial coverage, and no evidence', () => {
+test('aggregation ignores unknown probes while preserving mixed results and no evidence', () => {
   for (const [up, down, unknown, expected] of [
     [0, 0, 0, 'unknown'],
     [2, 0, 0, 'up'],
     [0, 2, 0, 'down'],
     [0, 0, 2, 'unknown'],
     [1, 1, 0, 'degraded'],
-    [1, 0, 1, 'degraded'],
-    [0, 1, 1, 'degraded'],
+    [1, 0, 1, 'up'],
+    [0, 1, 1, 'down'],
+    [1, 1, 1, 'degraded'],
   ])
     assert.equal(aggregateStatus(up, down, unknown), expected)
+  assert.equal(aggregateStatus(1, 0, 1, 1), 'degraded')
+  assert.equal(aggregateStatus(0, 0, 1, 1), 'degraded')
 })
 
 test('stale results stop counting as reachability evidence while a page remains open', () => {
@@ -70,7 +73,7 @@ test('stale results stop counting as reachability evidence while a page remains 
   assert.equal(aged.probes[0].status, 'unknown')
   assert.equal(aged.probes[0].stale, true)
   assert.deepEqual([aged.up, aged.down, aged.unknown], [0, 1, 1])
-  assert.equal(aged.status, 'degraded')
+  assert.equal(aged.status, 'down')
   assert.equal(summary.probes[0].status, 'up', 'the serialized input remains unchanged')
   assert.equal(refreshProbeSummary(summary, 2801).status, 'unknown')
 })
@@ -89,7 +92,7 @@ test('external status does not depend on native monitor state existing', () => {
   assert.equal(getMonitorStatus(native, emptyState, {}, 1100), 'unknown')
 })
 
-test('overall counts combine native and external monitors without treating missing data as green', () => {
+test('overall counts retain unknown monitors while ignoring missing probe results in reachability', () => {
   const state = {
     ...emptyState,
     lastUpdate: 1100,
@@ -101,16 +104,16 @@ test('overall counts combine native and external monitors without treating missi
   }
   const missing = { ...native, id: 'missing' }
   assert.deepEqual(summarizeMonitors([native, external, missing], state, summaries, 1100), {
-    up: 0,
+    up: 1,
     down: 1,
-    degraded: 1,
+    degraded: 0,
     unknown: 1,
     total: 3,
     lastUpdate: 1100,
   })
 })
 
-test('history colors require agreement from every probe despite unequal check intervals', () => {
+test('history colors consider only reporting probes despite unequal check intervals', () => {
   const now = 1_800_123
   const time = 1_800_000
   const history = (checks, failures, avgLatencyMs = 20) => ({
@@ -121,8 +124,9 @@ test('history colors require agreement from every probe despite unequal check in
   assert.equal(latest([history(30, 30), history(5, 5)]).status, 'down')
   assert.equal(latest([history(30, 0), history(5, 5)]).status, 'degraded')
   assert.equal(latest([history(30, 1), history(5, 0)]).status, 'degraded')
-  assert.equal(latest([history(30, 0), { history: [] }]).status, 'degraded')
-  assert.equal(latest([history(30, 30), { history: [] }]).status, 'degraded')
+  assert.equal(latest([history(30, 0), { history: [] }]).status, 'up')
+  assert.equal(latest([history(30, 30), { history: [] }]).status, 'down')
+  assert.equal(latest([history(30, 1), { history: [] }]).status, 'degraded')
   assert.equal(latest([{ history: [] }, history(0, 0)]).status, 'unknown')
   assert.equal(latest([]).status, 'unknown')
   assert.equal(latest([history(30, 1)]).status, 'degraded')
@@ -151,5 +155,6 @@ test('history aggregates counts and weighted latency into aligned five-minute in
   })
   assert.equal(buckets.at(-2).avgLatencyMs, null)
   assert.equal(buckets.at(-2).reported, 1)
+  assert.equal(buckets.at(-2).status, 'up')
   assert.equal(summarizeProbeHistory([], time + 300).at(-1).time, time + 300)
 })

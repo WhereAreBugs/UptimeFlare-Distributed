@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import MaintenanceAlert from './MaintenanceAlert'
 import { pageConfig } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
-import { statusColors, summarizeMonitors } from '@/util/probe-status'
+import { aggregateStatus, statusColors, summarizeMonitors } from '@/util/probe-status'
 
 function useWindowVisibility() {
   const [isVisible, setIsVisible] = useState(true)
@@ -47,13 +47,18 @@ export default function OverallStatus({
     total: state.overallUp + state.overallDown,
     lastUpdate: state.lastUpdate,
   }
-  if (counts.total === 0 || counts.unknown === counts.total) {
+  const status = aggregateStatus(counts.up, counts.down, counts.unknown, counts.degraded)
+  if (status === 'unknown') {
     statusString = t('No data yet')
     icon = <IconHelpCircle style={{ width: 64, height: 64, color: statusColors.unknown }} />
-  } else if (counts.down === counts.total) {
-    statusString = t('All systems not operational')
-  } else if (counts.up === counts.total) {
-    statusString = t('All systems operational')
+  } else if (status === 'down') {
+    statusString = t(
+      counts.unknown ? 'All reporting systems not operational' : 'All systems not operational'
+    )
+  } else if (status === 'up') {
+    statusString = t(
+      counts.unknown ? 'All reporting systems operational' : 'All systems operational'
+    )
     icon = <IconCircleCheck style={{ width: 64, height: 64, color: '#059669' }} />
   } else {
     statusString =

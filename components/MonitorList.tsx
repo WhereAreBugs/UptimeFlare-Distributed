@@ -88,7 +88,7 @@ export default function MonitorList({
                       paddingRight: '5px',
                       color:
                         statusColors[
-                          aggregateStatus(counts.up, counts.down, counts.unknown + counts.degraded)
+                          aggregateStatus(counts.up, counts.down, counts.unknown, counts.degraded)
                         ],
                     }}
                   >

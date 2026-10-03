@@ -302,13 +302,19 @@ describe('durable, idempotent and ordered ingestion', () => {
     expect(response.status).toBe(503)
     expect(await response.text()).not.toContain('accepted')
   })
-  it('includes missing probes and marks partial coverage degraded, then all fresh green and mixed down degraded', async () => {
+  it('retains missing probes as unknown without degrading reporting probes, and preserves mixed results', async () => {
     let stats = (
       await getProbeSummaries(env, monitors, [{ id: 'a', name: 'Singapore', location: 'SG' }], NOW)
     ).web
-    expect(stats.status).toBe('degraded')
+    expect(stats.status).toBe('up')
+    expect(stats.unknown).toBe(1)
     expect(stats.probes[0]).toMatchObject({ name: 'Singapore', location: 'SG' })
     expect(stats.probes[1]).toMatchObject({ status: 'unknown', stale: true, code: 'no_data' })
+    expect((await ingest(batch([sample(NOW - 90, false)]))).status).toBe(200)
+    stats = (await getProbeSummaries(env, monitors, [], NOW)).web
+    expect(stats.status).toBe('down')
+    expect(stats.unknown).toBe(1)
+    expect((await ingest(batch([sample(NOW - 80)]))).status).toBe(200)
     expect((await ingest(batch([sample(NOW - 60)]), TOKEN_B)).status).toBe(200)
     stats = (await getProbeSummaries(env, monitors, [], NOW)).web
     expect(stats.status).toBe('up')
