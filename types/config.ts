@@ -1,4 +1,5 @@
 import type { Env } from '../worker/src'
+import type { ProbeDefinition } from './probes'
 
 export type PageConfig = {
   title?: string
@@ -30,6 +31,8 @@ export type PageConfigLink = {
 }
 
 export type MonitorTarget = {
+  /** Assign this target to external probes instead of the scheduled Cloudflare checker. */
+  probes?: string[]
   id: string
   name: string
   method: string
@@ -48,6 +51,9 @@ export type MonitorTarget = {
 }
 
 export type WorkerConfig<TEnv = Env> = {
+  probes?: ProbeDefinition[]
+  /** An absent or old probe result is unknown; default: 900 seconds. */
+  probeStaleAfterSeconds?: number
   kvWriteCooldownMinutes?: number
   passwordProtection?: string
   monitors: MonitorTarget[]

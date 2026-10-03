@@ -1,7 +1,3 @@
-CREATE TABLE IF NOT EXISTS uptimeflare (
-    key VARCHAR(255) PRIMARY KEY,
-    value BLOB NOT NULL
-);
 -- Independent tables: probe ingestion never rewrites the native compacted state.
 CREATE TABLE IF NOT EXISTS probe_samples (
   probe_id TEXT NOT NULL,

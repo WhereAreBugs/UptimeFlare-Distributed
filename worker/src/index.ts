@@ -5,14 +5,22 @@ import { doMonitor, getStatus } from './monitor'
 import { formatAndNotify, getWorkerLocation } from './util'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import pLimit from 'p-limit'
+import { handleProbeRequest, cleanupProbeResults } from './probes'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
   UPTIMEFLARE_D1: D1Database
+  PROBE_TOKENS?: string
 }
 
 const Worker = {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    return handleProbeRequest(request, env, workerConfig.monitors)
+  },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(cleanupProbeResults(env).catch(() => console.error('Probe retention cleanup failed')))
+    const nativeMonitors = workerConfig.monitors.filter(monitor => !monitor.probes?.length)
+    if (!nativeMonitors.length) return
     const workerLocation = (await getWorkerLocation()) || 'ERROR'
     console.log(`Running scheduled event on ${workerLocation}...`)
 
@@ -30,7 +38,7 @@ const Worker = {
     let checkQueue: Promise<CheckResult>[] = []
     let checkResult: Record<string, CheckResult> = {};
     const limit = pLimit(5);
-    for (const monitor of workerConfig.monitors) {
+    for (const monitor of nativeMonitors) {
       checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
     }
     for (const result of await Promise.all(checkQueue)) {
@@ -38,7 +46,7 @@ const Worker = {
     }
 
     // Update each monitor's state based on check results
-    for (const monitor of workerConfig.monitors) {
+    for (const monitor of nativeMonitors) {
       console.log(`Processing monitor result: ${monitor.name} (${monitor.id})`)
 
       let monitorStatusChanged = false

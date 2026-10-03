@@ -3,6 +3,12 @@ import type { NextRequest } from 'next/server'
 import { workerConfig } from './uptime.config'
 
 export async function middleware(request: NextRequest) {
+  // These exact routes enforce independent bearer authentication in their handlers.
+  if (
+    request.nextUrl.pathname === '/api/probes/config' ||
+    request.nextUrl.pathname === '/api/probes/ingest'
+  )
+    return
   const passwordProtection = workerConfig.passwordProtection
   if (passwordProtection) {
     const authHeader = request.headers.get('Authorization')

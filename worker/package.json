@@ -5,11 +5,15 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev --test-scheduled --persist-to ../.wrangler/state",
-    "start": "wrangler dev"
+    "start": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
+    "miniflare": "^4.20260730.0",
     "typescript": "^5.0.4",
+    "vitest": "^3.2.7",
     "wrangler": "^4.54.0"
   },
   "dependencies": {

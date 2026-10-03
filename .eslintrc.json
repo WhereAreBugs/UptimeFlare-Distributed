@@ -6,12 +6,8 @@
       {
         "patterns": [
           {
-            "group": [
-              "**/uptime.config"
-            ],
-            "importNames": [
-              "workerConfig"
-            ],
+            "group": ["**/uptime.config"],
+            "importNames": ["workerConfig"],
             "message": "Do not import workerConfig in client-bundled files. See https://github.com/lyc8503/UptimeFlare/issues/198 for details."
           }
         ]
@@ -22,6 +18,8 @@
     {
       "files": [
         "pages/api/data.ts",
+        "pages/api/probes/config.ts",
+        "pages/api/probes/ingest.ts",
         "middleware.ts"
       ],
       "rules": {
