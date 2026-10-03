@@ -358,6 +358,7 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
         method: monitor.method,
         headers: headers,
         body: monitor.body,
+        redirect: 'manual',
         cf: {
           cacheTtlByStatus: {
             '100-599': -1, // Don't cache any status code, from https://developers.cloudflare.com/workers/runtime-apis/request/#requestinitcfproperties

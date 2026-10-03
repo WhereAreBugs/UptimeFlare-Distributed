@@ -64,7 +64,7 @@ npx wrangler d1 execute uptimeflare_d1 --remote --file ../migrations/0001_extern
 
 Cloudflare 没有固定服务器 IP，默认显示最近执行节点，例如 `Cloudflare SIN · AS13335`；节点可随调度变化。`cloudflare` 为保留身份，不能在 `PROBE_TOKENS` 中分配外部令牌，以避免独立探针冒充内置检查。
 
-已有安装需执行 `migrations/0003_probe_metadata.sql`；自动部署的 `init.sql` 会幂等创建标签表。数据库中的旧自定义名称不会被自动覆盖，将名称清空即可使用自动命名。Cloudflare 正文关键词检查限于 1 MiB，读取超时或超过上限时分别显示 `body/timeout` 和 `body/too_large`。
+已有安装需执行 `migrations/0003_probe_metadata.sql`；自动部署的 `init.sql` 会幂等创建标签表。数据库中的旧自定义名称不会被自动覆盖，将名称清空即可使用自动命名。Cloudflare 正文关键词检查限于 1 MiB，读取超时或超过上限时分别显示 `body/timeout` 和 `body/too_large`。HTTP 检查与 Go 探针一致，不跟随重定向；需要接受 3xx 时显式配置预期状态码，或直接配置最终地址。
 
 保存后配置存储在 D1 `admin_config`，带版本冲突检测；探针下一次刷新通常在 5 分钟内获取。页面、API、scheduled Worker 和配置接口使用同一份配置。`uptime.config.ts` 仅作初始配置，第一次网页保存后，重部署不会覆盖 D1 配置。高级鉴权字段仅返回给已登录管理员和分配的探针。
 

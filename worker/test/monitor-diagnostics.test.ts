@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { createServer } from 'node:http'
 import type { MonitorTarget } from '../../types/config'
 import { doMonitor } from '../src/monitor'
 
@@ -56,6 +57,39 @@ describe('native monitor incident diagnostics', () => {
     })
     expect(result.status.err).not.toContain('secret.example')
     expect(result.status.err).not.toContain('abc')
+  })
+
+  test('checks the configured endpoint status without following a real redirect', async () => {
+    let destinationRequests = 0
+    const server = createServer((request, response) => {
+      if (request.url === '/redirect') {
+        response.writeHead(302, { Location: '/destination' }).end()
+      } else {
+        destinationRequests++
+        response.writeHead(204).end()
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address() as { port: number }
+      fetchMock.mockImplementationOnce((url, _timeout, options) => fetch(url, options))
+      const result = await doMonitor(
+        { ...monitor, target: `http://127.0.0.1:${address.port}/redirect` },
+        'SIN',
+        {} as never
+      )
+      expect(result.status).toMatchObject({
+        up: false,
+        stage: 'http',
+        code: 'status',
+        err: '[http/status] Expected codes: 2xx, Got: 302',
+      })
+      expect(destinationRequests).toBe(0)
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      )
+    }
   })
 
   test('body reads are distinct from connection establishment', async () => {
