@@ -81,6 +81,7 @@
   "Probe failed checks heading": "探针上报的失败检查",
   "Probe incidents limit": "此处展示所有探针最近的 200 次失败检查，来源为每个探针对每台主机保留的最多 100 次失败。可在状态页面展开主机查看完整的阶段统计。",
   "Probe monitor": "主机",
+  "Probe monitor unavailable": "未找到监控目标",
   "Probe name": "探针",
   "Probe no failed checks in month": "近期保留的结果中，无此月份的失败检查。",
   "Probe published incidents": "已发布的故障与维护",

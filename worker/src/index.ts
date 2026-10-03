@@ -10,6 +10,7 @@ import { getRuntimeConfig } from './settings'
 import { handleAdminRequest } from './admin'
 import { CLOUDFLARE_PROBE_ID } from './probe-labels'
 import { runCloudflareProbe } from './cloudflare-probe'
+import { runNotifications } from './notifications'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
@@ -48,14 +49,24 @@ const Worker = {
     const cloudflareMonitors = workerConfig.monitors.filter(
       (monitor) => monitor.probes?.includes(CLOUDFLARE_PROBE_ID)
     )
-    if (!nativeMonitors.length && !cloudflareMonitors.length) return
+    const notify = () =>
+      runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
+        console.error('Notification evaluation failed')
+      )
+    if (!nativeMonitors.length && !cloudflareMonitors.length) {
+      await notify()
+      return
+    }
     const workerLocation = (await getWorkerLocation().catch(() => undefined)) || 'UNKNOWN'
     if (cloudflareMonitors.length) {
       // Stable minute identity makes a repeated cron event idempotent.
       const time = Math.floor(event.scheduledTime / 60000) * 60
       await runCloudflareProbe(env, cloudflareMonitors, time, workerLocation)
     }
-    if (!nativeMonitors.length) return
+    if (!nativeMonitors.length) {
+      await notify()
+      return
+    }
     console.log(`Running scheduled event on ${workerLocation}...`)
 
     // Create a wrapped MonitorState from stored compacted state
@@ -123,7 +134,8 @@ const Worker = {
               currentTimeSecond - lastIncident.start[0] >=
                 (workerConfig.notification.gracePeriod + 1) * 60 - 30
             ) {
-              await formatAndNotify(monitor, true, lastIncident.start[0], currentTimeSecond, 'OK')
+              if (!monitor.notificationTemplateId)
+                await formatAndNotify(monitor, true, lastIncident.start[0], currentTimeSecond, 'OK')
             } else {
               console.log(
                 `grace period (${workerConfig.notification?.gracePeriod}m) not met, skipping webhook UP notification for ${monitor.name}`
@@ -190,13 +202,14 @@ const Worker = {
                 'Skipping notification for following error reason change due to user config'
               )
             } else {
-              await formatAndNotify(
-                monitor,
-                false,
-                currentIncident.start[0],
-                currentTimeSecond,
-                status.err
-              )
+              if (!monitor.notificationTemplateId)
+                await formatAndNotify(
+                  monitor,
+                  false,
+                  currentIncident.start[0],
+                  currentTimeSecond,
+                  status.err
+                )
             }
           } else {
             console.log(
@@ -293,6 +306,7 @@ const Worker = {
     } else {
       console.log('Skipping state update due to cooldown period.')
     }
+    await notify()
   },
 }
 

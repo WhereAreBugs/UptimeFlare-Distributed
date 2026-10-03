@@ -81,6 +81,7 @@
   "Probe failed checks heading": "Reported probe failures",
   "Probe incidents limit": "The latest 200 failed checks across all probes are available here, drawn from up to 100 retained failures per probe and host. Expand a host on the status page for full stage totals.",
   "Probe monitor": "Host",
+  "Probe monitor unavailable": "Monitor not found",
   "Probe name": "Probe",
   "Probe no failed checks in month": "No failed checks for this month in the recent retained results.",
   "Probe published incidents": "Published incidents and maintenance",

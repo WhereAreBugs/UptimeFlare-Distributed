@@ -53,7 +53,7 @@ export default function Home({
   if (monitorId) {
     const monitor = monitors.find((monitor) => monitor.id === monitorId)
     if (!monitor || !state) {
-      return <Text fw={700}>{t('Monitor not found', { id: monitorId })}</Text>
+      return <Text fw={700}>{t('Probe monitor unavailable')}</Text>
     }
     return (
       <div style={{ maxWidth: '810px' }}>

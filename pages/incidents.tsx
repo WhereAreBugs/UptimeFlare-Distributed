@@ -231,7 +231,7 @@ export async function getServerSideProps() {
           ...failure,
           monitorId: summary.monitorId,
           monitorName:
-            monitors.find((monitor) => monitor.id === summary.monitorId)?.name ?? summary.monitorId,
+            monitors.find((monitor) => monitor.id === summary.monitorId)?.name ?? '未命名目标',
           probeName: probe.name,
         }))
       )

@@ -1,4 +1,5 @@
-import type { MonitorTarget, WorkerConfig } from '../../types/config'
+import type { MonitorTarget, NotificationTemplate, WorkerConfig } from '../../types/config'
+import { normalizeInternalIds } from '../../util/internal-id'
 import type { ProbeDefinition } from '../../types/probes'
 import type { ProbeEnv } from './probes'
 import { getSettings, type EditableSettings } from './settings'
@@ -128,146 +129,233 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
   )
     throw new AdminInputError('探针过期时间应为 300–86400 秒')
   const ids = new Set<string>()
-  const probes: ProbeDefinition[] = value.probes.map((probe: any) => {
+  const probes: ProbeDefinition[] = []
+  for (const probe of value.probes) {
     if (
       !probe ||
       typeof probe.id !== 'string' ||
       !ID.test(probe.id) ||
-      ids.has(probe.id) ||
       (!registered.has(probe.id) && probe.id !== CLOUDFLARE_PROBE_ID)
     )
-      throw new AdminInputError('探针 ID 必须唯一；独立探针需要配置令牌，cloudflare 为内置探针')
+      throw new AdminInputError('独立探针需要配置令牌；Cloudflare 为内置探针')
+    if (ids.has(probe.id)) continue
     ids.add(probe.id)
     if (probe.name !== undefined && !text(probe.name, 200))
       throw new AdminInputError('探针名称过长或无效')
     if (probe.location !== undefined && !text(probe.location, 200))
       throw new AdminInputError('探针地区过长或无效')
-    return {
+    probes.push({
       id: probe.id,
       ...(probe.name !== undefined && { name: probe.name }),
       ...(probe.location !== undefined && { location: probe.location }),
-    }
-  })
+    })
+  }
   if (!ids.has(CLOUDFLARE_PROBE_ID)) probes.push({ id: CLOUDFLARE_PROBE_ID })
-  const monitorIds = new Set<string>()
-  let assignments = 0
-  const monitors: MonitorTarget[] = value.monitors.map((monitor: any) => {
+  const rawTemplates = value.notificationTemplates ?? []
+  if (!Array.isArray(rawTemplates) || rawTemplates.length > 50)
+    throw new AdminInputError('通知模板最多 50 个')
+  const notificationTemplates: NotificationTemplate[] = normalizeInternalIds(
+    rawTemplates,
+    'template'
+  ).map((template: any) => {
+    if (!text(template.name, 200, true) || template.type !== 'webhook')
+      throw new AdminInputError('通知模板名称不能为空，类型应为 Webhook')
+    const webhook = template.webhook
+    if (!webhook || !text(webhook.url, 2048, true))
+      throw new AdminInputError('Webhook 地址不能为空或过长')
+    let url: URL
+    try {
+      url = new URL(webhook.url)
+    } catch {
+      throw new AdminInputError('Webhook 地址无效')
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+      throw new AdminInputError('Webhook 地址只支持 http/https，鉴权请使用请求头')
+    const method = webhook.method ?? 'POST'
     if (
-      !monitor ||
-      typeof monitor.id !== 'string' ||
-      !ID.test(monitor.id) ||
-      monitorIds.has(monitor.id)
+      !['GET', 'POST', 'PUT', 'PATCH'].includes(method) ||
+      !['param', 'json', 'x-www-form-urlencoded'].includes(webhook.payloadType) ||
+      (method === 'GET' && webhook.payloadType !== 'param')
     )
-      throw new AdminInputError('目标 ID 必须唯一，仅使用字母、数字、点、下划线或连字符')
-    monitorIds.add(monitor.id)
-    if (!text(monitor.name, 200, true) || !text(monitor.target, 2048, true))
-      throw new AdminInputError('目标名称和地址不能为空或过长')
+      throw new AdminInputError('Webhook 请求方法与参数格式不匹配')
     if (
-      !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TCP_PING'].includes(
-        monitor.method
-      )
+      !webhook.payload ||
+      typeof webhook.payload !== 'object' ||
+      Array.isArray(webhook.payload) ||
+      encoder.encode(JSON.stringify(webhook.payload)).length > 16384
     )
-      throw new AdminInputError('检测方法无效')
-    if (monitor.method === 'TCP_PING') {
-      if (
-        !/^(?:\[[0-9a-fA-F:]+\]|[^\s:/?#]+):\d{1,5}$/.test(monitor.target) ||
-        Number(monitor.target.slice(monitor.target.lastIndexOf(':') + 1)) < 1 ||
-        Number(monitor.target.slice(monitor.target.lastIndexOf(':') + 1)) > 65535
-      )
-        throw new AdminInputError('TCP 地址应为 host:port，IPv6 使用 [地址]:port')
-    } else {
-      let url: URL
-      try {
-        url = new URL(monitor.target)
-      } catch {
-        throw new AdminInputError('HTTP 地址无效')
-      }
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-        throw new AdminInputError('HTTP 地址只支持 http/https，鉴权请使用请求头')
-    }
-    if (
-      !Array.isArray(monitor.probes) ||
-      !monitor.probes.length ||
-      new Set(monitor.probes).size !== monitor.probes.length ||
-      monitor.probes.some((id: string) => !ids.has(id) && id !== CLOUDFLARE_PROBE_ID)
-    )
-      throw new AdminInputError('每个目标至少分配一个已注册探针')
-    assignments += monitor.probes.length
-    const result: MonitorTarget = {
-      id: monitor.id,
-      name: monitor.name,
-      method: monitor.method,
-      target: monitor.target,
-      probes: [...monitor.probes],
-    }
-    if (monitor.timeout !== undefined) {
-      if (!Number.isInteger(monitor.timeout) || monitor.timeout < 1 || monitor.timeout > 120000)
-        throw new AdminInputError('超时应为 1–120000 毫秒')
-      result.timeout = monitor.timeout
-    }
-    if (monitor.expectedCodes !== undefined) {
-      if (
-        !Array.isArray(monitor.expectedCodes) ||
-        !monitor.expectedCodes.length ||
-        monitor.expectedCodes.length > 20 ||
-        monitor.expectedCodes.some(
-          (code: number) => !Number.isInteger(code) || code < 100 || code > 599
-        )
-      )
-        throw new AdminInputError('HTTP 状态码无效')
-      result.expectedCodes = [...monitor.expectedCodes]
-    }
-    for (const field of [
-      'responseKeyword',
-      'responseForbiddenKeyword',
-      'tooltip',
-      'statusPageLink',
-    ] as const) {
-      if (monitor[field] !== undefined) {
-        if (!text(monitor[field], field.startsWith('response') ? 4096 : 2048))
-          throw new AdminInputError('关键词或显示字段过长或无效')
-        if (field === 'statusPageLink' && monitor[field]) {
-          let url: URL
-          try {
-            url = new URL(monitor[field])
-          } catch {
-            throw new AdminInputError('显示链接无效')
-          }
-          if (!['http:', 'https:'].includes(url.protocol))
-            throw new AdminInputError('显示链接只支持 http/https')
-        }
-        result[field] = monitor[field]
+      throw new AdminInputError('Webhook 正文应为 JSON 对象，最多 16 KiB')
+    const pending = [{ value: webhook.payload, depth: 0 }]
+    let nodes = 0
+    while (pending.length) {
+      const entry = pending.pop()!
+      if (++nodes > 2048 || entry.depth > 16)
+        throw new AdminInputError('Webhook 正文嵌套或字段数量过多')
+      if (entry.value && typeof entry.value === 'object') {
+        for (const item of Object.values(entry.value))
+          pending.push({ value: item, depth: entry.depth + 1 })
       }
     }
-    if (monitor.body !== undefined) {
-      if (typeof monitor.body !== 'string' || encoder.encode(monitor.body).length > 16384)
-        throw new AdminInputError('请求体最多 16 KiB')
-      result.body = monitor.body
-    }
-    if (monitor.headers !== undefined) {
+    if (
+      webhook.payloadType !== 'json' &&
+      Object.values(webhook.payload).some((item) => item !== null && typeof item === 'object')
+    )
+      throw new AdminInputError('查询参数和表单只支持单层字段')
+    const headers: Record<string, string> = {}
+    if (webhook.headers !== undefined) {
       if (
-        !monitor.headers ||
-        typeof monitor.headers !== 'object' ||
-        Array.isArray(monitor.headers) ||
-        Object.keys(monitor.headers).length > 32
+        !webhook.headers ||
+        typeof webhook.headers !== 'object' ||
+        Array.isArray(webhook.headers) ||
+        Object.keys(webhook.headers).length > 32
       )
-        throw new AdminInputError('请求头无效或超过 32 个')
-      const headers: Record<string, string> = {}
-      for (const [key, item] of Object.entries(monitor.headers)) {
+        throw new AdminInputError('Webhook 请求头无效或超过 32 个')
+      for (const [key, item] of Object.entries(webhook.headers)) {
         if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) || !text(item, 4096))
-          throw new AdminInputError('请求头名称或内容无效')
+          throw new AdminInputError('Webhook 请求头名称或内容无效')
         headers[key] = item
       }
-      result.headers = headers
     }
-    if (monitor.hideLatencyChart !== undefined) {
-      if (typeof monitor.hideLatencyChart !== 'boolean') throw new AdminInputError('图表开关无效')
-      result.hideLatencyChart = monitor.hideLatencyChart
+    const timeout = webhook.timeout ?? 5000
+    if (!Number.isInteger(timeout) || timeout < 1 || timeout > 30000)
+      throw new AdminInputError('Webhook 超时应为 1–30000 毫秒')
+    return {
+      id: template.id,
+      name: template.name,
+      type: 'webhook',
+      webhook: {
+        url: webhook.url,
+        method,
+        payloadType: webhook.payloadType,
+        payload: webhook.payload,
+        headers,
+        timeout,
+      },
     }
-    return result
   })
+  const templateIds = new Set(notificationTemplates.map((template) => template.id))
+  let assignments = 0
+  const monitors: MonitorTarget[] = normalizeInternalIds(value.monitors, 'monitor').map(
+    (monitor: any) => {
+      if (!text(monitor.name, 200, true) || !text(monitor.target, 2048, true))
+        throw new AdminInputError('目标名称和地址不能为空或过长')
+      if (
+        !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TCP_PING'].includes(
+          monitor.method
+        )
+      )
+        throw new AdminInputError('检测方法无效')
+      if (monitor.method === 'TCP_PING') {
+        if (
+          !/^(?:\[[0-9a-fA-F:]+\]|[^\s:/?#]+):\d{1,5}$/.test(monitor.target) ||
+          Number(monitor.target.slice(monitor.target.lastIndexOf(':') + 1)) < 1 ||
+          Number(monitor.target.slice(monitor.target.lastIndexOf(':') + 1)) > 65535
+        )
+          throw new AdminInputError('TCP 地址应为 host:port，IPv6 使用 [地址]:port')
+      } else {
+        let url: URL
+        try {
+          url = new URL(monitor.target)
+        } catch {
+          throw new AdminInputError('HTTP 地址无效')
+        }
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+          throw new AdminInputError('HTTP 地址只支持 http/https，鉴权请使用请求头')
+      }
+      if (
+        !Array.isArray(monitor.probes) ||
+        !monitor.probes.length ||
+        monitor.probes.some((id: string) => !ids.has(id) && id !== CLOUDFLARE_PROBE_ID)
+      )
+        throw new AdminInputError('每个目标至少分配一个已注册探针')
+      const assigned = Array.from(new Set<string>(monitor.probes))
+      assignments += assigned.length
+      const result: MonitorTarget = {
+        id: monitor.id,
+        name: monitor.name,
+        method: monitor.method,
+        target: monitor.target,
+        probes: assigned,
+      }
+      if (monitor.notificationTemplateId) {
+        if (!templateIds.has(monitor.notificationTemplateId))
+          throw new AdminInputError('请选择已存在的通知模板')
+        result.notificationTemplateId = monitor.notificationTemplateId
+      }
+      if (monitor.timeout !== undefined) {
+        if (!Number.isInteger(monitor.timeout) || monitor.timeout < 1 || monitor.timeout > 120000)
+          throw new AdminInputError('超时应为 1–120000 毫秒')
+        result.timeout = monitor.timeout
+      }
+      if (monitor.expectedCodes !== undefined) {
+        if (
+          !Array.isArray(monitor.expectedCodes) ||
+          !monitor.expectedCodes.length ||
+          monitor.expectedCodes.length > 20 ||
+          monitor.expectedCodes.some(
+            (code: number) => !Number.isInteger(code) || code < 100 || code > 599
+          )
+        )
+          throw new AdminInputError('HTTP 状态码无效')
+        result.expectedCodes = [...monitor.expectedCodes]
+      }
+      for (const field of [
+        'responseKeyword',
+        'responseForbiddenKeyword',
+        'tooltip',
+        'statusPageLink',
+      ] as const) {
+        if (monitor[field] !== undefined) {
+          if (!text(monitor[field], field.startsWith('response') ? 4096 : 2048))
+            throw new AdminInputError('关键词或显示字段过长或无效')
+          if (field === 'statusPageLink' && monitor[field]) {
+            let url: URL
+            try {
+              url = new URL(monitor[field])
+            } catch {
+              throw new AdminInputError('显示链接无效')
+            }
+            if (!['http:', 'https:'].includes(url.protocol))
+              throw new AdminInputError('显示链接只支持 http/https')
+          }
+          result[field] = monitor[field]
+        }
+      }
+      if (monitor.body !== undefined) {
+        if (typeof monitor.body !== 'string' || encoder.encode(monitor.body).length > 16384)
+          throw new AdminInputError('请求体最多 16 KiB')
+        result.body = monitor.body
+      }
+      if (monitor.headers !== undefined) {
+        if (
+          !monitor.headers ||
+          typeof monitor.headers !== 'object' ||
+          Array.isArray(monitor.headers) ||
+          Object.keys(monitor.headers).length > 32
+        )
+          throw new AdminInputError('请求头无效或超过 32 个')
+        const headers: Record<string, string> = {}
+        for (const [key, item] of Object.entries(monitor.headers)) {
+          if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) || !text(item, 4096))
+            throw new AdminInputError('请求头名称或内容无效')
+          headers[key] = item
+        }
+        result.headers = headers
+      }
+      if (monitor.hideLatencyChart !== undefined) {
+        if (typeof monitor.hideLatencyChart !== 'boolean') throw new AdminInputError('图表开关无效')
+        result.hideLatencyChart = monitor.hideLatencyChart
+      }
+      return result
+    }
+  )
   if (assignments > 64) throw new AdminInputError('目标与探针分配组合最多 64 个')
-  return { monitors, probes, probeStaleAfterSeconds: value.probeStaleAfterSeconds }
+  return {
+    monitors,
+    probes,
+    notificationTemplates,
+    probeStaleAfterSeconds: value.probeStaleAfterSeconds,
+  }
 }
 
 export async function handleAdminRequest(

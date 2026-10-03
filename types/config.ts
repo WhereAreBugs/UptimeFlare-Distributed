@@ -31,6 +31,8 @@ export type PageConfigLink = {
 }
 
 export type MonitorTarget = {
+  /** Internal reference to an administrator-defined webhook template. */
+  notificationTemplateId?: string
   /** Assigned probes, including reserved ID `cloudflare` for the scheduled Worker. */
   probes?: string[]
   id: string
@@ -51,6 +53,7 @@ export type MonitorTarget = {
 }
 
 export type WorkerConfig<TEnv = Env> = {
+  notificationTemplates?: NotificationTemplate[]
   probes?: ProbeDefinition[]
   /** An absent or old probe result is unknown; default: 900 seconds. */
   probeStaleAfterSeconds?: number
@@ -69,7 +72,7 @@ export type Notification = {
   skipErrorChangeNotification?: boolean
 }
 
-type SingleWebhook = {
+export type SingleWebhook = {
   url: string
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH'
   headers?: { [key: string]: string | number }
@@ -79,6 +82,13 @@ type SingleWebhook = {
 }
 
 export type WebhookConfig = SingleWebhook | SingleWebhook[]
+
+export type NotificationTemplate = {
+  id: string
+  name: string
+  type: 'webhook'
+  webhook: SingleWebhook
+}
 
 export type Callbacks<TEnv = Env> = {
   onStatusChange?: (

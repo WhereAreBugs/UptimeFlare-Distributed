@@ -17,8 +17,31 @@ import {
   Textarea,
   Title,
 } from '@mantine/core'
-import type { MonitorTarget } from '@/types/config'
+import type { MonitorTarget, NotificationTemplate } from '@/types/config'
 import type { StoredSettings } from '@/worker/src/settings'
+import NotificationTemplateEditor, {
+  type WebhookDraft,
+} from '@/components/NotificationTemplateEditor'
+import { createInternalId } from '@/util/internal-id'
+
+const probeName = (probe: Config['probes'][number], index: number) =>
+  probe.name ||
+  probe.defaultName ||
+  (probe.id === 'cloudflare' ? 'Cloudflare' : `探针 ${index + 1}`)
+
+// Repeated display names remain selectable without exposing internal identities.
+function optionLabels<T extends { id: string }>(
+  items: T[],
+  name: (item: T, index: number) => string
+) {
+  const counts = new Map<string, number>()
+  return items.map((item, index) => {
+    const label = name(item, index)
+    const count = (counts.get(label) ?? 0) + 1
+    counts.set(label, count)
+    return { value: item.id, label: count > 1 ? `${label}（${count}）` : label }
+  })
+}
 
 type Config = StoredSettings & { probes: NonNullable<StoredSettings['probes']> }
 async function api(path: string, method = 'GET', body?: unknown) {
@@ -45,10 +68,12 @@ export default function Admin() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [advanced, setAdvanced] = useState<Record<string, string>>({})
+  const [webhookDrafts, setWebhookDrafts] = useState<Record<string, WebhookDraft>>({})
   const load = async () => {
     const result = await api('config')
     setConfig(result)
     setAdvanced({})
+    setWebhookDrafts({})
   }
   useEffect(() => {
     load()
@@ -86,10 +111,10 @@ export default function Admin() {
       try {
         fields = JSON.parse(advanced[monitor.id])
       } catch {
-        throw new Error(`${monitor.name} 的高级配置 JSON 无效`)
+        throw new Error(`${monitor.name} 的附加设置 JSON 无效`)
       }
       if (!fields || typeof fields !== 'object' || Array.isArray(fields))
-        throw new Error('高级配置应为 JSON 对象')
+        throw new Error('附加设置应为 JSON 对象')
       return {
         ...fields,
         id: monitor.id,
@@ -98,11 +123,30 @@ export default function Admin() {
         method: monitor.method,
         probes: monitor.probes,
         timeout: monitor.timeout,
+        notificationTemplateId: monitor.notificationTemplateId,
       }
     })
-    const saved = await api('config', 'PUT', { ...config, monitors })
+    const notificationTemplates = (config.notificationTemplates ?? []).map((template) => {
+      const draft = webhookDrafts[template.id]
+      try {
+        return {
+          ...template,
+          webhook: {
+            ...template.webhook,
+            headers:
+              draft?.headers === undefined ? template.webhook.headers : JSON.parse(draft.headers),
+            payload:
+              draft?.payload === undefined ? template.webhook.payload : JSON.parse(draft.payload),
+          },
+        }
+      } catch {
+        throw new Error(`${template.name} 的推送配置 JSON 无效`)
+      }
+    })
+    const saved = await api('config', 'PUT', { ...config, monitors, notificationTemplates })
     setConfig(saved)
     setAdvanced({})
+    setWebhookDrafts({})
     setMessage('已保存到 D1。探针通常在 5 分钟内获取新配置。')
   }
   return (
@@ -186,12 +230,10 @@ export default function Admin() {
                 </Text>
                 {config.probes.map((probe, index) => (
                   <Group key={probe.id} align="end" grow>
-                    <TextInput label="探针 ID" value={probe.id} readOnly />
                     <TextInput
                       label="显示名称"
                       value={probe.name ?? ''}
-                      placeholder={probe.defaultName ?? probe.id}
-                      description={`自动名称：${probe.defaultName ?? probe.id}`}
+                      placeholder={probe.defaultName ?? probeName(probe, index)}
                       onChange={(e) => {
                         const name = e.currentTarget.value
                         setConfig({
@@ -217,7 +259,7 @@ export default function Admin() {
                   </Group>
                 ))}
                 <NumberInput
-                  label="无新结果多久后显示探针失联（秒）"
+                  label="离线超时（秒）"
                   min={300}
                   max={86400}
                   value={config.probeStaleAfterSeconds ?? 900}
@@ -225,6 +267,74 @@ export default function Admin() {
                 />
               </Stack>
             </Paper>
+            <Group justify="space-between">
+              <Title order={3}>通知模板</Title>
+              <Button
+                variant="light"
+                onClick={() =>
+                  setConfig({
+                    ...config,
+                    notificationTemplates: [
+                      ...(config.notificationTemplates ?? []),
+                      {
+                        id: createInternalId(
+                          'template',
+                          new Set(
+                            (config.notificationTemplates ?? []).map((template) => template.id)
+                          )
+                        ),
+                        name: '新模板',
+                        type: 'webhook',
+                        webhook: {
+                          url: 'https://',
+                          method: 'POST',
+                          payloadType: 'json',
+                          payload: { text: '$MSG' },
+                          timeout: 5000,
+                        },
+                      },
+                    ],
+                  })
+                }
+              >
+                添加模板
+              </Button>
+            </Group>
+            {(config.notificationTemplates ?? []).map((template, index) => (
+              <NotificationTemplateEditor
+                key={template.id}
+                template={template}
+                draft={webhookDrafts[template.id]}
+                onChange={(patch: Partial<NotificationTemplate>) =>
+                  setConfig({
+                    ...config,
+                    notificationTemplates: (config.notificationTemplates ?? []).map(
+                      (item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)
+                    ),
+                  })
+                }
+                onDraftChange={(patch) =>
+                  setWebhookDrafts((old) => ({
+                    ...old,
+                    [template.id]: { ...old[template.id], ...patch },
+                  }))
+                }
+                onRemove={() => {
+                  if (window.confirm('删除此模板并关闭使用它的目标通知？'))
+                    setConfig({
+                      ...config,
+                      notificationTemplates: (config.notificationTemplates ?? []).filter(
+                        (item) => item.id !== template.id
+                      ),
+                      monitors: config.monitors.map((monitor) =>
+                        monitor.notificationTemplateId === template.id
+                          ? { ...monitor, notificationTemplateId: undefined }
+                          : monitor
+                      ),
+                    })
+                }}
+              />
+            ))}
             <Group justify="space-between">
               <Title order={3}>监控目标</Title>
               <Button
@@ -235,7 +345,10 @@ export default function Admin() {
                     monitors: [
                       ...config.monitors,
                       {
-                        id: `monitor-${crypto.randomUUID().slice(0, 8)}`,
+                        id: createInternalId(
+                          'monitor',
+                          new Set(config.monitors.map((monitor) => monitor.id))
+                        ),
                         name: '新目标',
                         target: 'https://',
                         method: 'GET',
@@ -249,11 +362,17 @@ export default function Admin() {
                 添加目标
               </Button>
             </Group>
-            <Text size="sm" c="dimmed">
-              取消目标或探针分配前，请先让相关探针补传完本地积压。
-            </Text>
             {config.monitors.map((monitor, index) => {
-              const { id, name, target, method, probes, timeout, ...extras } = monitor
+              const {
+                id,
+                name,
+                target,
+                method,
+                probes,
+                timeout,
+                notificationTemplateId,
+                ...extras
+              } = monitor
               return (
                 <Paper withBorder p="md" key={id}>
                   <Stack>
@@ -263,7 +382,7 @@ export default function Admin() {
                         color="red"
                         variant="subtle"
                         onClick={() => {
-                          if (window.confirm('确认删除此目标？请先确认探针积压已补传完成。'))
+                          if (window.confirm('确认删除此目标？'))
                             setConfig({
                               ...config,
                               monitors: config.monitors.filter((_, i) => i !== index),
@@ -274,7 +393,6 @@ export default function Admin() {
                       </Button>
                     </Group>
                     <Group grow>
-                      <TextInput label="目标 ID（保留历史）" value={id} readOnly />
                       <TextInput
                         label="名称"
                         value={name}
@@ -312,17 +430,25 @@ export default function Admin() {
                     />
                     <MultiSelect
                       label="执行探针"
-                      data={config.probes.map((p) => ({
-                        value: p.id,
-                        label: p.name || p.defaultName || p.id,
-                      }))}
+                      data={optionLabels(config.probes, probeName)}
                       value={probes ?? []}
                       onChange={(v) => updateMonitor(index, { probes: v })}
                     />
+                    <Select
+                      label="通知模板"
+                      placeholder="关闭通知"
+                      clearable
+                      data={optionLabels(
+                        config.notificationTemplates ?? [],
+                        (template) => template.name || '未命名模板'
+                      )}
+                      value={notificationTemplateId ?? null}
+                      onChange={(value) =>
+                        updateMonitor(index, { notificationTemplateId: value ?? undefined })
+                      }
+                    />
                     <details>
-                      <summary style={{ cursor: 'pointer' }}>
-                        高级配置：状态码、关键词、请求头和请求体
-                      </summary>
+                      <summary style={{ cursor: 'pointer' }}>附加设置</summary>
                       <Textarea
                         mt="sm"
                         label="JSON"
@@ -332,10 +458,6 @@ export default function Admin() {
                         value={advanced[id] ?? JSON.stringify(extras, null, 2)}
                         onChange={(e) => setAdvanced({ ...advanced, [id]: e.currentTarget.value })}
                       />
-                      <Text size="xs" c="dimmed" mt="xs">
-                        例如 {`{"expectedCodes":[200],"responseKeyword":"OK"}`}
-                        。鉴权头仅在管理员接口及分配的探针中可见。
-                      </Text>
                     </details>
                   </Stack>
                 </Paper>

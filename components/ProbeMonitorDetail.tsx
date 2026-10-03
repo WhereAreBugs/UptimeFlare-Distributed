@@ -35,10 +35,10 @@ function StatusIcon({ status }: { status: MonitorStatus }) {
   return <Icon size={20} color={statusColors[status]} aria-hidden />
 }
 
-function emptyProbe(id: string): ProbeSummary {
+function emptyProbe(id: string, index: number): ProbeSummary {
   return {
     id,
-    name: id,
+    name: id === 'cloudflare' ? 'Cloudflare' : `探针 ${index + 1}`,
     status: 'unknown',
     stale: false,
     latest: null,
@@ -312,9 +312,11 @@ export default function ProbeMonitorDetail({
                         <Group gap={6}>
                           <StatusIcon status={probe.status} />
                           <Text fw={500}>{probe.name}</Text>
-                          <Text size="xs" c="dimmed">
-                            {probe.location ?? probe.id}
-                          </Text>
+                          {probe.location && (
+                            <Text size="xs" c="dimmed">
+                              {probe.location}
+                            </Text>
+                          )}
                         </Group>
                         <Badge color={statusColors[probe.status]} variant="light">
                           {t(

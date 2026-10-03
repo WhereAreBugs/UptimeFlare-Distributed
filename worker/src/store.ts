@@ -1,4 +1,4 @@
-import { Env } from '.'
+import type { Env } from '.'
 import {
   IncidentRecord,
   LatencyRecord,
@@ -6,13 +6,20 @@ import {
   MonitorStateCompacted,
 } from '../../types/config'
 
-export async function getFromStore(env: Env, key: string): Promise<string | null> {
+export async function getFromStore(
+  env: Pick<Env, 'UPTIMEFLARE_D1'>,
+  key: string
+): Promise<string | null> {
   const stmt = env.UPTIMEFLARE_D1.prepare('SELECT value FROM uptimeflare WHERE key = ?')
   const result = await stmt.bind(key).first<{ value: string }>()
   return result?.value || null
 }
 
-export async function setToStore(env: Env, key: string, value: string): Promise<void> {
+export async function setToStore(
+  env: Pick<Env, 'UPTIMEFLARE_D1'>,
+  key: string,
+  value: string
+): Promise<void> {
   const stmt = env.UPTIMEFLARE_D1.prepare(
     'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;'
   )
@@ -57,7 +64,9 @@ export class CompactedMonitorStateWrapper {
         // @ts-expect-error
         return Uint8Array.fromHex(hex)
       } else {
-        console.warn('Uint8Array.fromHex is not available, using parseInt as fallback. Consider upgrading your browser.')
+        console.warn(
+          'Uint8Array.fromHex is not available, using parseInt as fallback. Consider upgrading your browser.'
+        )
         const ret = new Uint8Array(hex.length / 2)
         for (let i = 0; i < hex.length; i += 2) {
           ret[i / 2] = parseInt(hex.slice(i, i + 2), 16)

@@ -133,11 +133,25 @@ describe('authenticated web configuration with actual D1', () => {
     const value = {
       ...fallback,
       revision: 0,
+      notificationTemplates: [
+        {
+          id: 'notice',
+          name: '故障通知',
+          type: 'webhook',
+          webhook: {
+            url: 'https://private-hook.example/secret-path',
+            payloadType: 'json',
+            headers: { Authorization: 'private-webhook-header' },
+            payload: { text: '$MSG' },
+          },
+        },
+      ],
       monitors: [
         {
           ...fallback.monitors[0],
           target: 'https://edited.example',
           headers: { Authorization: 'private-target-header' },
+          notificationTemplateId: 'notice',
         },
       ],
     }
@@ -158,6 +172,8 @@ describe('authenticated web configuration with actual D1', () => {
     ).toBe(403)
     const runtime = await getRuntimeConfig(env, fallback)
     expect(runtime.monitors[0].target).toBe('https://edited.example')
+    expect(runtime.notificationTemplates?.[0].name).toBe('故障通知')
+    expect(runtime.monitors[0].notificationTemplateId).toBe('notice')
     const probe = await handleProbeRequest(
       new Request('https://status.test/api/probes/config', {
         headers: { Authorization: 'Bearer ' + TOKEN },
@@ -166,7 +182,10 @@ describe('authenticated web configuration with actual D1', () => {
       runtime.monitors
     )
     expect(probe.status).toBe(200)
-    expect(await probe.json()).toMatchObject({
+    const probeConfig = await probe.json()
+    expect(JSON.stringify(probeConfig)).not.toContain('private-webhook-header')
+    expect(JSON.stringify(probeConfig)).not.toContain('private-hook.example')
+    expect(probeConfig).toMatchObject({
       probe_id: 'a',
       monitors: [{ target: 'https://edited.example' }],
     })
@@ -226,12 +245,9 @@ describe('authenticated web configuration with actual D1', () => {
 })
 
 describe('configuration validation', () => {
-  it('rejects unregistered identities, duplicate monitors and unsupported targets', () => {
+  it('rejects unregistered identities and unsupported targets', () => {
     const validate = (value: unknown) => validateSettings(value, new Set(['a']))
     expect(() => validate({ ...fallback, probes: [{ id: 'unknown' }] })).toThrow()
-    expect(() =>
-      validate({ ...fallback, monitors: [...fallback.monitors, ...fallback.monitors] })
-    ).toThrow()
     expect(() =>
       validate({
         ...fallback,
@@ -253,6 +269,73 @@ describe('configuration validation', () => {
     expect(() =>
       validate({ ...fallback, monitors: [{ ...fallback.monitors[0], probes: [] }] })
     ).toThrow()
+  })
+  it('automatically allocates missing and repeated identities while preserving existing history references', () => {
+    const value = validateSettings(
+      {
+        ...fallback,
+        probes: [...fallback.probes!, ...fallback.probes!],
+        monitors: [
+          fallback.monitors[0],
+          { ...fallback.monitors[0] },
+          { ...fallback.monitors[0], id: undefined },
+        ],
+      },
+      new Set(['a'])
+    )
+    expect(value.monitors[0].id).toBe(fallback.monitors[0].id)
+    expect(new Set(value.monitors.map((monitor) => monitor.id)).size).toBe(3)
+    expect(value.monitors.slice(1).every((monitor) => monitor.id.startsWith('monitor-'))).toBe(true)
+    expect(value.probes?.filter((probe) => probe.id === 'a')).toHaveLength(1)
+  })
+  it('validates webhook templates and target references without exposing private delivery configuration to probes', async () => {
+    const template = {
+      name: '通知',
+      type: 'webhook',
+      webhook: {
+        url: 'https://hooks.example.test/private',
+        method: 'POST',
+        payloadType: 'json',
+        headers: { Authorization: 'private-webhook-credential' },
+        payload: { text: '$MSG' },
+      },
+    }
+    const settings = validateSettings(
+      { ...fallback, notificationTemplates: [template] },
+      new Set(['a'])
+    )
+    const id = settings.notificationTemplates![0].id
+    const configured = validateSettings(
+      { ...settings, monitors: [{ ...fallback.monitors[0], notificationTemplateId: id }] },
+      new Set(['a'])
+    )
+    expect(configured.notificationTemplates![0].webhook.headers).toEqual(template.webhook.headers)
+    const probe = await handleProbeRequest(
+      new Request('https://status.test/api/probes/config', {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      }),
+      env,
+      configured.monitors
+    )
+    const body = await probe.text()
+    expect(body).not.toContain('private-webhook-credential')
+    expect(body).not.toContain('hooks.example.test')
+    expect(body).not.toContain('notificationTemplateId')
+    expect(() =>
+      validateSettings({ ...configured, notificationTemplates: [] }, new Set(['a']))
+    ).toThrow()
+    for (const webhook of [
+      { ...template.webhook, url: 'file:///etc/passwd' },
+      { ...template.webhook, method: 'GET' },
+      { ...template.webhook, headers: { Test: 'bad\r\nheader' } },
+      { ...template.webhook, timeout: 30001 },
+    ])
+      expect(() =>
+        validateSettings(
+          { ...fallback, notificationTemplates: [{ ...template, webhook }] },
+          new Set(['a'])
+        )
+      ).toThrow()
   })
   it('drops nonallowlisted executable configuration and accepts explicit TCP port 443', () => {
     const config = validateSettings(

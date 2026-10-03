@@ -493,7 +493,7 @@ export async function getProbeSummaries(
   const labels = new Map(definitions.map((probe) => [probe.id, probe]))
   const summaries: Record<string, ProbeMonitorSummary> = {}
   for (const monitor of external) {
-    const probes = monitor.probes!.map((id) => {
+    const probes = monitor.probes!.map((id, index) => {
       const lookup = `${monitor.id}\0${id}`
       const latest = latestMap.get(lookup)
       const totals = totalsMap.get(lookup)
@@ -502,7 +502,10 @@ export async function getProbeSummaries(
       const status = stale ? 'unknown' : latest!.up ? 'up' : 'down'
       const probe: ProbeSummary = {
         id,
-        name: definition?.name || definition?.defaultName || id,
+        name:
+          definition?.name ||
+          definition?.defaultName ||
+          (id === CLOUDFLARE_PROBE_ID ? 'Cloudflare' : `探针 ${index + 1}`),
         location: definition?.location || definition?.defaultLocation || undefined,
         status,
         stale,

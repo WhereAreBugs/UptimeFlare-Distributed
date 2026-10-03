@@ -139,6 +139,32 @@ test('data preflight and unsupported methods do not read the database', async ()
   assert.deepEqual(calls, { nativeReads: 0, probeReads: 0 })
 })
 
+test('public results never expose notification template configuration or credentials', async () => {
+  const { handler } = loadHandler(
+    'data',
+    {
+      monitors: [{ ...external, notificationTemplateId: 'private-template' }],
+      notificationTemplates: [
+        {
+          id: 'private-template',
+          name: 'Private',
+          type: 'webhook',
+          webhook: {
+            url: 'https://private-hook.example/secret-path',
+            headers: { Authorization: 'private-notification-secret' },
+          },
+        },
+      ],
+    },
+    { host: makeSummary('up') }
+  )
+  const response = await handler(request('/api/data'))
+  const body = await response.text()
+  assert.equal(response.status, 200)
+  for (const secret of ['private-template', 'private-hook.example', 'private-notification-secret'])
+    assert.equal(body.includes(secret), false)
+})
+
 test('probe badges distinguish unknown, mixed and failed results without reading native incidents', async () => {
   for (const [status, message, color] of [
     ['up', 'UP', 'brightgreen'],
