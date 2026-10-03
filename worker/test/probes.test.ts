@@ -326,11 +326,13 @@ describe('durable, idempotent and ordered ingestion', () => {
     )
       .bind('a', 'web')
       .first<any>()
-    const stagesBefore = await env.UPTIMEFLARE_D1.prepare(
-      'SELECT * FROM probe_stage_totals WHERE probe_id=? AND monitor_id=?'
-    )
-      .bind('a', 'web')
-      .all<any>()
+    const stagesBefore = (
+      await env.UPTIMEFLARE_D1.prepare(
+        'SELECT * FROM probe_stage_totals WHERE probe_id=? AND monitor_id=?'
+      )
+        .bind('a', 'web')
+        .all<any>()
+    ).results
     expect((await ingest(batch([sample(NOW - 91 * 24 * 3600, false)]))).status).toBe(200)
     const before = await count('probe_samples')
     await cleanupProbeResults(env, NOW)
@@ -343,11 +345,13 @@ describe('durable, idempotent and ordered ingestion', () => {
         .first<any>()
     ).toEqual(totalsBefore)
     expect(
-      await env.UPTIMEFLARE_D1.prepare(
-        'SELECT * FROM probe_stage_totals WHERE probe_id=? AND monitor_id=?'
-      )
-        .bind('a', 'web')
-        .all<any>()
+      (
+        await env.UPTIMEFLARE_D1.prepare(
+          'SELECT * FROM probe_stage_totals WHERE probe_id=? AND monitor_id=?'
+        )
+          .bind('a', 'web')
+          .all<any>()
+      ).results
     ).toEqual(stagesBefore)
     await cleanupProbeResults(env, NOW)
     expect(
