@@ -1,3 +1,10 @@
+import {
+  DEFAULT_MONITOR_TIMEOUT_MS,
+  getMonitorIntervalSeconds,
+  getMonitorStaleAfterSeconds,
+  MIN_MONITOR_INTERVAL_SECONDS,
+  MAX_MONITOR_INTERVAL_SECONDS,
+} from '../../util/monitor-settings'
 import type { MonitorTarget } from '../../types/config'
 import type {
   ProbeBatch,
@@ -93,6 +100,12 @@ function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTa
   for (const monitor of monitors) {
     if (
       !ID.test(monitor.id) ||
+      (monitor.intervalSeconds !== undefined && !Number.isInteger(monitor.intervalSeconds)) ||
+      !Number.isInteger(getMonitorIntervalSeconds(monitor)) ||
+      getMonitorIntervalSeconds(monitor) < MIN_MONITOR_INTERVAL_SECONDS ||
+      getMonitorIntervalSeconds(monitor) > MAX_MONITOR_INTERVAL_SECONDS ||
+      (monitor.timeout !== undefined &&
+        (!Number.isInteger(monitor.timeout) || monitor.timeout < 1 || monitor.timeout > 120000)) ||
       (monitor.probes &&
         (!Array.isArray(monitor.probes) ||
           monitor.probes.length === 0 ||
@@ -209,7 +222,9 @@ function validateBatch(value: unknown, authorized: MonitorTarget[], now: number)
 export async function persistBatch(
   env: ProbeEnv,
   probeId: string,
-  results: ProbeResult[]
+  results: ProbeResult[],
+  completionStatements: D1PreparedStatement[] = [],
+  gate?: { scope: string; key: string }
 ): Promise<void> {
   // Normalize absent diagnostics once, so the SQL never persists unvalidated extra JSON fields.
   const payload = JSON.stringify(
@@ -233,8 +248,12 @@ export async function persistBatch(
       (probe_id, monitor_id, time, up, latency_ms, stage, code, message)
       SELECT ?, json_extract(value,'$.monitor_id'), json_extract(value,'$.time'),
       json_extract(value,'$.up'), json_extract(value,'$.latency_ms'), json_extract(value,'$.stage'),
-      json_extract(value,'$.code'), json_extract(value,'$.message') FROM json_each(?)`
-    ).bind(probeId, payload),
+      json_extract(value,'$.code'), json_extract(value,'$.message') FROM json_each(?) entry${
+        gate
+          ? ` WHERE EXISTS (SELECT 1 FROM monitor_schedule schedule WHERE schedule.scope=? AND schedule.monitor_id=json_extract(entry.value,'$.monitor_id') AND schedule.lease_key=?)`
+          : ''
+      }`
+    ).bind(probeId, payload, ...(gate ? [gate.scope, gate.key] : [])),
     // Read the persisted sample, rather than the submitted one: a conflicting replay must not change latest.
     env.UPTIMEFLARE_D1.prepare(
       `INSERT INTO probe_latest
@@ -296,7 +315,7 @@ export async function persistBatch(
     ).bind(payload, probeId),
   ]
   // D1 batches run atomically. No ACK is returned before all samples and summaries are durable.
-  const response = await env.UPTIMEFLARE_D1.batch(statements)
+  const response = await env.UPTIMEFLARE_D1.batch([...statements, ...completionStatements])
   if (response.some((item) => !item.success)) throw new Error('Probe persistence failed')
 }
 
@@ -330,7 +349,8 @@ export async function handleProbeRequest(
           id: monitor.id,
           method: monitor.method,
           target: monitor.target,
-          timeout: monitor.timeout ?? 10000,
+          intervalSeconds: getMonitorIntervalSeconds(monitor),
+          timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
           ...(monitor.headers && {
             headers: Object.fromEntries(
               Object.entries(monitor.headers).map(([key, value]) => [key, String(value)])
@@ -421,8 +441,7 @@ export async function getProbeSummaries(
   env: ProbeEnv,
   monitors: MonitorTarget[],
   definitions: ProbeDefinition[] = [],
-  now = Math.floor(Date.now() / 1000),
-  staleAfter = 900
+  now = Math.floor(Date.now() / 1000)
 ): Promise<Record<string, ProbeMonitorSummary>> {
   const external = monitors.filter((m) => m.probes?.length)
   if (!external.length) return {}
@@ -498,7 +517,7 @@ export async function getProbeSummaries(
       const latest = latestMap.get(lookup)
       const totals = totalsMap.get(lookup)
       const definition = labels.get(id)
-      const stale = !latest || latest.time < now - staleAfter
+      const stale = !latest || latest.time < now - getMonitorStaleAfterSeconds(monitor)
       const status = stale ? 'unknown' : latest!.up ? 'up' : 'down'
       const probe: ProbeSummary = {
         id,

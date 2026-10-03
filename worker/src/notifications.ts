@@ -1,3 +1,4 @@
+import { getMonitorStaleAfterSeconds } from '../../util/monitor-settings'
 import type { MonitorTarget, SingleWebhook, WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { getProbeSummaries } from './probes'
@@ -250,13 +251,7 @@ export async function runNotifications(
   ])
   if (cleanup.some((result) => !result.success)) throw new Error('Notification cleanup failed')
   if (!monitors.length) return
-  const summaries = await getProbeSummaries(
-    env,
-    monitors,
-    config.probes,
-    now,
-    config.probeStaleAfterSeconds
-  )
+  const summaries = await getProbeSummaries(env, monitors, config.probes, now)
   const native = monitors.some((monitor) => !monitor.probes?.length)
     ? new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
     : null
@@ -269,17 +264,15 @@ export async function runNotifications(
         .map((probe) => `${probe.name}: ${probe.stage ?? 'unknown'}/${probe.code ?? 'unknown'}`)
         .join('; ')
       await queueNotification(env, monitor, summary.status, summary.latest ?? now, reason, now)
-    } else if (
-      native &&
-      native.data.lastUpdate >= now - (config.probeStaleAfterSeconds ?? 900) &&
-      native.incidentLen(monitor.id)
-    ) {
+    } else if (native && native.data.latency[monitor.id]?.time && native.incidentLen(monitor.id)) {
+      const latest = native.getLastLatency(monitor.id)
+      if (latest.time < now - getMonitorStaleAfterSeconds(monitor)) continue
       const incident = native.getIncident(monitor.id, native.incidentLen(monitor.id) - 1)
       await queueNotification(
         env,
         monitor,
         incident.end === null ? 'down' : 'up',
-        native.data.lastUpdate,
+        latest.time,
         incident.end === null ? incident.error[incident.error.length - 1] ?? '' : '',
         now
       )

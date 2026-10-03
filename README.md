@@ -19,7 +19,7 @@ New users can deploy directly, while existing users can have a simple auto migra
 
 - Open-source, easy to deploy (in under 10 minutes, no local tools required), and free
 - Monitoring capabilities
-  - Up to 50 checks at 1-minute intervals
+  - Per-target check intervals from 60 seconds to 24 hours; default 5 minutes
   - Geo-specific checks from over [310 cities](https://www.cloudflare.com/network/) worldwide
   - Support for HTTP/HTTPS/TCP port monitoring
   - Up to 90-day uptime history and uptime percentage tracking

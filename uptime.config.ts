@@ -9,10 +9,9 @@ const pageConfig: PageConfig = {
 }
 
 // Initial settings. After the first admin save, D1 becomes authoritative for
-// monitors, probe labels and stale time. Redeploying does not overwrite them.
+// monitors, probe labels and per-target intervals. Redeploying does not overwrite them.
 const workerConfig: WorkerConfig = {
   probes: [{ id: 'probe-1' }, { id: 'probe-2' }, { id: 'cloudflare' }],
-  probeStaleAfterSeconds: 900,
   monitors: [
     {
       id: 'tools-test',
@@ -20,7 +19,8 @@ const workerConfig: WorkerConfig = {
       method: 'GET',
       target: 'https://tools.n.kuapt.top:8888/',
       probes: ['probe-1', 'probe-2', 'cloudflare'],
-      timeout: 10000,
+      intervalSeconds: 300,
+      timeout: 5000,
     },
   ],
 }

@@ -15,6 +15,8 @@ import { getProbeSummaries } from '@/worker/src/probes'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import { summarizeMonitors } from '@/util/probe-status'
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/router'
+import { getMonitorIntervalSeconds } from '@/util/monitor-settings'
 
 export const runtime = 'experimental-edge'
 const inter = Inter({ subsets: ['latin'] })
@@ -23,14 +25,13 @@ export default function Home({
   compactedStateStr,
   monitors,
   probeSummaries = {},
-  staleAfterSeconds = 900,
 }: {
   compactedStateStr: string | null
   monitors: MonitorTarget[]
   probeSummaries?: Record<string, ProbeMonitorSummary>
-  staleAfterSeconds?: number
 }) {
   const { t } = useTranslation('common')
+  const router = useRouter()
   const state = useMemo(
     () => new CompactedMonitorStateWrapper(compactedStateStr).uncompact(),
     [compactedStateStr]
@@ -47,7 +48,32 @@ export default function Home({
       clearInterval(timer)
     }
   }, [])
-  const aggregate = summarizeMonitors(monitors, state, probeSummaries, now, staleAfterSeconds)
+  useEffect(() => {
+    if (!router.isReady) return
+    let refreshing = false
+    const refresh = async () => {
+      if (document.hidden || refreshing) return
+      refreshing = true
+      try {
+        await router.replace(router.asPath, undefined, { scroll: false })
+      } catch {
+        // A failed page refresh must not erase the last available history.
+      } finally {
+        refreshing = false
+      }
+    }
+    const onVisible = () => {
+      if (!document.hidden) void refresh()
+    }
+    const refreshEverySeconds = Math.min(300, ...monitors.map(getMonitorIntervalSeconds))
+    const timer = setInterval(() => void refresh(), refreshEverySeconds * 1000)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [router, monitors])
+  const aggregate = summarizeMonitors(monitors, state, probeSummaries, now)
 
   // Specify monitorId in URL hash to view a specific monitor (can be used in iframe)
   if (monitorId) {
@@ -57,13 +83,7 @@ export default function Home({
     }
     return (
       <div style={{ maxWidth: '810px' }}>
-        <MonitorDetail
-          monitor={monitor}
-          state={state}
-          probeSummaries={probeSummaries}
-          now={now}
-          staleAfterSeconds={staleAfterSeconds}
-        />
+        <MonitorDetail monitor={monitor} state={state} probeSummaries={probeSummaries} now={now} />
       </div>
     )
   }
@@ -90,7 +110,6 @@ export default function Home({
             state={state}
             probeSummaries={probeSummaries}
             now={now}
-            staleAfterSeconds={staleAfterSeconds}
           />
         </div>
 
@@ -111,8 +130,7 @@ export async function getServerSideProps() {
       process.env as any,
       workerConfig.monitors,
       workerConfig.probes,
-      Math.round(Date.now() / 1000),
-      workerConfig.probeStaleAfterSeconds
+      Math.round(Date.now() / 1000)
     ),
   ])
 
@@ -121,6 +139,7 @@ export async function getServerSideProps() {
     return {
       id: monitor.id,
       name: monitor.name,
+      intervalSeconds: getMonitorIntervalSeconds(monitor),
       ...(monitor.tooltip !== undefined && { tooltip: monitor.tooltip }),
       ...(monitor.statusPageLink !== undefined && { statusPageLink: monitor.statusPageLink }),
       ...(monitor.hideLatencyChart !== undefined && { hideLatencyChart: monitor.hideLatencyChart }),
@@ -133,7 +152,6 @@ export async function getServerSideProps() {
       compactedStateStr,
       monitors,
       probeSummaries,
-      staleAfterSeconds: workerConfig.probeStaleAfterSeconds ?? 900,
     },
   }
 }

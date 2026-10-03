@@ -1,6 +1,11 @@
 import { Text, Tooltip } from '@mantine/core'
 import { MonitorState, MonitorTarget } from '@/types/config'
-import { IconAlertCircle, IconAlertTriangle, IconCircleCheck } from '@tabler/icons-react'
+import {
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconCircleCheck,
+  IconHelpCircle,
+} from '@tabler/icons-react'
 import DetailChart from './DetailChart'
 import DetailBar from './DetailBar'
 import { getColor } from '@/util/color'
@@ -8,31 +13,23 @@ import { maintenances } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import ProbeMonitorDetail from './ProbeMonitorDetail'
+import { getMonitorStatus, statusColors } from '@/util/probe-status'
 
 export default function MonitorDetail({
   monitor,
   state,
   probeSummaries = {},
   now = Math.round(Date.now() / 1000),
-  staleAfterSeconds,
 }: {
   monitor: MonitorTarget
   state: MonitorState
   probeSummaries?: Record<string, ProbeMonitorSummary>
   now?: number
-  staleAfterSeconds?: number
 }) {
   const { t } = useTranslation('common')
 
   if (monitor.probes?.length)
-    return (
-      <ProbeMonitorDetail
-        monitor={monitor}
-        summary={probeSummaries[monitor.id]}
-        now={now}
-        staleAfterSeconds={staleAfterSeconds}
-      />
-    )
+    return <ProbeMonitorDetail monitor={monitor} summary={probeSummaries[monitor.id]} now={now} />
 
   const incidents = state.incident[monitor.id]
   if (!state.latency[monitor.id]?.length || !incidents?.length)
@@ -47,8 +44,18 @@ export default function MonitorDetail({
       </>
     )
 
+  const status = getMonitorStatus(monitor, state, probeSummaries, now)
   let statusIcon =
-    incidents.slice(-1)[0].end === null ? (
+    status === 'unknown' ? (
+      <IconHelpCircle
+        style={{
+          width: '1.25em',
+          height: '1.25em',
+          color: statusColors.unknown,
+          marginRight: '3px',
+        }}
+      />
+    ) : status === 'down' ? (
       <IconAlertCircle
         style={{ width: '1.25em', height: '1.25em', color: '#b91c1c', marginRight: '3px' }}
       />

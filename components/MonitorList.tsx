@@ -12,13 +12,11 @@ export default function MonitorList({
   state,
   probeSummaries = {},
   now = Math.round(Date.now() / 1000),
-  staleAfterSeconds,
 }: {
   monitors: MonitorTarget[]
   state: MonitorState
   probeSummaries?: Record<string, ProbeMonitorSummary>
   now?: number
-  staleAfterSeconds?: number
 }) {
   const { t } = useTranslation('common')
   const group = { ...pageConfig.group }
@@ -68,7 +66,7 @@ export default function MonitorList({
       >
         {Object.keys(group).map((groupName) => {
           const members = monitors.filter((monitor) => group[groupName].includes(monitor.id))
-          const counts = summarizeMonitors(members, state, probeSummaries, now, staleAfterSeconds)
+          const counts = summarizeMonitors(members, state, probeSummaries, now)
           return (
             <Accordion.Item key={groupName} value={groupName}>
               <Accordion.Control>
@@ -108,7 +106,6 @@ export default function MonitorList({
                           state={state}
                           probeSummaries={probeSummaries}
                           now={now}
-                          staleAfterSeconds={staleAfterSeconds}
                         />
                       </Card.Section>
                     </div>
@@ -129,7 +126,6 @@ export default function MonitorList({
             state={state}
             probeSummaries={probeSummaries}
             now={now}
-            staleAfterSeconds={staleAfterSeconds}
           />
         </Card.Section>
       </div>

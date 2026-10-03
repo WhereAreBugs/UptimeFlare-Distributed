@@ -13,6 +13,15 @@ const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
 const loaded = new Module(filename, module)
 loaded.filename = filename
 loaded.paths = module.paths
+const settingsFilename = path.join(__dirname, 'monitor-settings.ts')
+const settingsModule = new Module(settingsFilename, module)
+settingsModule._compile(
+  ts.transpileModule(fs.readFileSync(settingsFilename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText,
+  settingsFilename
+)
+loaded.require = (id) => (id === './monitor-settings' ? settingsModule.exports : require(id))
 loaded._compile(compiled, filename)
 const {
   aggregateStatus,
@@ -67,20 +76,44 @@ test('aggregation ignores unknown probes while preserving mixed results and no e
 })
 
 test('stale results stop counting as reachability evidence while a page remains open', () => {
-  const summary = makeSummary([makeProbe('a', 'up', 1000), makeProbe('b', 'down', 1800)])
-  assert.equal(refreshProbeSummary(summary, 1900).status, 'degraded')
-  const aged = refreshProbeSummary(summary, 1901)
+  const summary = makeSummary([makeProbe('a', 'up', 1000), makeProbe('b', 'down', 1500)])
+  assert.equal(refreshProbeSummary(summary, 1600).status, 'degraded')
+  const aged = refreshProbeSummary(summary, 1601)
   assert.equal(aged.probes[0].status, 'unknown')
   assert.equal(aged.probes[0].stale, true)
   assert.deepEqual([aged.up, aged.down, aged.unknown], [0, 1, 1])
   assert.equal(aged.status, 'down')
   assert.equal(summary.probes[0].status, 'up', 'the serialized input remains unchanged')
-  assert.equal(refreshProbeSummary(summary, 2801).status, 'unknown')
+  assert.equal(refreshProbeSummary(summary, 2101).status, 'unknown')
 })
 
 test('a server-declared stale result remains unknown even if the browser clock is behind', () => {
   const summary = makeSummary([makeProbe('a', 'up', 1000, true)])
   assert.equal(refreshProbeSummary(summary, 999).status, 'unknown')
+})
+
+test('each target ages results at twice its own interval, including while a page remains open', () => {
+  const summary = makeSummary([makeProbe('a', 'up', 1000)])
+  const fast = { ...external, intervalSeconds: 60 }
+  const slow = { ...external, intervalSeconds: 1800 }
+  assert.equal(refreshProbeSummary(summary, 1120, fast).status, 'up')
+  assert.equal(refreshProbeSummary(summary, 1121, fast).status, 'unknown')
+  assert.equal(refreshProbeSummary(summary, 4600, slow).status, 'up')
+  assert.equal(refreshProbeSummary(summary, 4601, slow).status, 'unknown')
+  assert.equal(getMonitorStatus(fast, emptyState, { external: summary }, 1121), 'unknown')
+  assert.equal(getMonitorStatus(slow, emptyState, { external: summary }, 1121), 'up')
+})
+
+test('newer native targets do not keep another target fresh', () => {
+  const state = {
+    ...emptyState,
+    lastUpdate: 1700,
+    latency: { native: [{ time: 1000, ping: 12, loc: 'SIN' }] },
+    incident: { native: [{ start: [1000], end: 1000, error: [] }] },
+  }
+  assert.equal(getMonitorStatus(native, state, {}, 1600), 'up')
+  assert.equal(getMonitorStatus(native, state, {}, 1601), 'unknown')
+  assert.equal(getMonitorStatus({ ...native, intervalSeconds: 600 }, state, {}, 1700), 'up')
 })
 
 test('external status does not depend on native monitor state existing', () => {

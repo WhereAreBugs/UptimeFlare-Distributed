@@ -4,6 +4,7 @@ import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
 import { getRuntimeConfig } from '@/worker/src/settings'
 import { getProbeSummaries } from '@/worker/src/probes'
 import { parseNativeDiagnostic } from '@/worker/src/diagnostics'
+import { getMonitorStaleAfterSeconds } from '@/util/monitor-settings'
 
 export const runtime = 'edge'
 
@@ -29,8 +30,7 @@ export default async function handler(req: NextRequest): Promise<Response> {
       process.env as any,
       workerConfig.monitors,
       workerConfig.probes,
-      Math.round(Date.now() / 1000),
-      workerConfig.probeStaleAfterSeconds
+      Math.round(Date.now() / 1000)
     ),
   ])
   const compactedState = new CompactedMonitorStateWrapper(stateStr)
@@ -63,7 +63,6 @@ export default async function handler(req: NextRequest): Promise<Response> {
       }
       continue
     }
-    updatedAt = Math.max(updatedAt, compactedState.data.lastUpdate)
     const incidentCount = compactedState.incidentLen(monitor.id)
     const lastIncident = incidentCount
       ? compactedState.getIncident(monitor.id, incidentCount - 1)
@@ -71,7 +70,11 @@ export default async function handler(req: NextRequest): Promise<Response> {
     const latency = compactedState.latencyLen(monitor.id)
       ? compactedState.getLastLatency(monitor.id)
       : null
-    const status = !latency || !lastIncident ? 'unknown' : lastIncident.end === null ? 'down' : 'up'
+    updatedAt = Math.max(updatedAt, latency?.time ?? 0)
+    const stale =
+      !latency ||
+      Math.floor(Date.now() / 1000) - latency.time > getMonitorStaleAfterSeconds(monitor)
+    const status = stale || !lastIncident ? 'unknown' : lastIncident.end === null ? 'down' : 'up'
     const failure =
       status === 'down'
         ? parseNativeDiagnostic(lastIncident!.error[lastIncident!.error.length - 1])

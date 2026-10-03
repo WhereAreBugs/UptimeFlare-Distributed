@@ -16,7 +16,6 @@ import {
 
 const NOW = Math.floor(Date.now() / 1000)
 const config: WorkerConfig = {
-  probeStaleAfterSeconds: 900,
   probes: [{ id: 'a' }, { id: 'b' }],
   monitors: [
     {

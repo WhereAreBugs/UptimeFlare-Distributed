@@ -25,6 +25,13 @@ import NotificationTemplateEditor, {
   type WebhookDraft,
 } from '@/components/NotificationTemplateEditor'
 import { createInternalId } from '@/util/internal-id'
+import {
+  DEFAULT_MONITOR_INTERVAL_SECONDS,
+  DEFAULT_MONITOR_TIMEOUT_MS,
+  MAX_MONITOR_INTERVAL_SECONDS,
+  MIN_MONITOR_INTERVAL_SECONDS,
+  getMonitorIntervalSeconds,
+} from '@/util/monitor-settings'
 
 const probeName = (probe: Config['probes'][number], index: number) =>
   probe.name ||
@@ -71,6 +78,7 @@ export default function Admin() {
   const [message, setMessage] = useState('')
   const [advanced, setAdvanced] = useState<Record<string, string>>({})
   const [webhookDrafts, setWebhookDrafts] = useState<Record<string, WebhookDraft>>({})
+  const [activeTab, setActiveTab] = useState<string | null>('monitors')
   const load = async () => {
     const result = await api('config')
     setConfig(result)
@@ -105,6 +113,25 @@ export default function Admin() {
         }
     )
   }
+  const updateOptionalMonitor = (
+    index: number,
+    field: 'intervalSeconds' | 'timeout',
+    value: string | number
+  ) => {
+    setConfig(
+      (old) =>
+        old && {
+          ...old,
+          monitors: old.monitors.map((monitor, monitorIndex) => {
+            if (monitorIndex !== index) return monitor
+            const updated = { ...monitor }
+            if (value === '') delete updated[field]
+            else updated[field] = Number(value)
+            return updated
+          }),
+        }
+    )
+  }
   const save = async () => {
     if (!config) return
     const monitors = config.monitors.map((monitor) => {
@@ -117,13 +144,16 @@ export default function Admin() {
       }
       if (!fields || typeof fields !== 'object' || Array.isArray(fields))
         throw new Error('附加设置应为 JSON 对象')
+      const { intervalSeconds: ignoredInterval, ...extraFields } = fields
+      void ignoredInterval
       return {
-        ...fields,
+        ...extraFields,
         id: monitor.id,
         name: monitor.name,
         target: monitor.target,
         method: monitor.method,
         probes: monitor.probes,
+        intervalSeconds: monitor.intervalSeconds,
         timeout: monitor.timeout,
         notificationTemplateId: monitor.notificationTemplateId,
       }
@@ -226,7 +256,7 @@ export default function Admin() {
           </Paper>
         ) : (
           <Stack>
-            <Tabs defaultValue="monitors" keepMounted={false}>
+            <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
               <Tabs.List grow aria-label="配置板块">
                 <Tabs.Tab value="monitors">监控目标</Tabs.Tab>
                 <Tabs.Tab value="probes">探针</Tabs.Tab>
@@ -240,45 +270,77 @@ export default function Admin() {
                       Cloudflare 为内置探针，无需令牌。独立探针的默认名称为公网 IP 归属地与 ASN。
                       名称留空使用自动命名；手动填写可覆盖。新增独立探针需要先配置服务端令牌。
                     </Text>
-                    {config.probes.map((probe, index) => (
-                      <Group key={probe.id} align="end" grow>
-                        <TextInput
-                          label="显示名称"
-                          value={probe.name ?? ''}
-                          placeholder={probe.defaultName ?? probeName(probe, index)}
-                          onChange={(e) => {
-                            const name = e.currentTarget.value
-                            setConfig({
-                              ...config,
-                              probes: config.probes.map((p, i) =>
-                                i === index ? { ...p, name } : p
-                              ),
-                            })
-                          }}
-                        />
-                        <TextInput
-                          label="地区 / 运营商"
-                          value={probe.location ?? ''}
-                          placeholder={probe.defaultLocation ?? ''}
-                          onChange={(e) => {
-                            const location = e.currentTarget.value
-                            setConfig({
-                              ...config,
-                              probes: config.probes.map((p, i) =>
-                                i === index ? { ...p, location } : p
-                              ),
-                            })
-                          }}
-                        />
-                      </Group>
-                    ))}
-                    <NumberInput
-                      label="离线超时（秒）"
-                      min={300}
-                      max={86400}
-                      value={config.probeStaleAfterSeconds ?? 900}
-                      onChange={(v) => setConfig({ ...config, probeStaleAfterSeconds: Number(v) })}
-                    />
+                    {config.probes.map((probe, index) => {
+                      const assigned = config.monitors.filter(
+                        (monitor) => monitor.probes?.includes(probe.id)
+                      )
+                      return (
+                        <Paper key={probe.id} withBorder p="sm">
+                          <Group align="end" grow>
+                            <TextInput
+                              label="显示名称"
+                              value={probe.name ?? ''}
+                              placeholder={probe.defaultName ?? probeName(probe, index)}
+                              onChange={(e) => {
+                                const name = e.currentTarget.value
+                                setConfig({
+                                  ...config,
+                                  probes: config.probes.map((p, i) =>
+                                    i === index ? { ...p, name } : p
+                                  ),
+                                })
+                              }}
+                            />
+                            <TextInput
+                              label="地区 / 运营商"
+                              value={probe.location ?? ''}
+                              placeholder={probe.defaultLocation ?? ''}
+                              onChange={(e) => {
+                                const location = e.currentTarget.value
+                                setConfig({
+                                  ...config,
+                                  probes: config.probes.map((p, i) =>
+                                    i === index ? { ...p, location } : p
+                                  ),
+                                })
+                              }}
+                            />
+                          </Group>
+                          <Group justify="space-between" mt="sm" mb="xs">
+                            <Text size="sm" fw={500}>
+                              执行目标（{assigned.length}）
+                            </Text>
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              onClick={() => setActiveTab('monitors')}
+                            >
+                              配置目标
+                            </Button>
+                          </Group>
+                          {assigned.length ? (
+                            <Stack gap={4}>
+                              {assigned.map((monitor) => (
+                                <Group key={monitor.id} justify="space-between" gap="xs">
+                                  <Text size="sm">{monitor.name || '未命名目标'}</Text>
+                                  <Text size="xs" c="dimmed">
+                                    每 {getMonitorIntervalSeconds(monitor)} 秒 · 超时{' '}
+                                    {(monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS) / 1000} 秒
+                                  </Text>
+                                </Group>
+                              ))}
+                            </Stack>
+                          ) : (
+                            <Text size="sm" c="dimmed">
+                              尚未分配监控目标
+                            </Text>
+                          )}
+                        </Paper>
+                      )
+                    })}
+                    <Text size="xs" c="dimmed">
+                      检测设置由监控目标统一配置，已保存的变更会自动下发到执行探针。
+                    </Text>
                   </Stack>
                 </Paper>
               </Tabs.Panel>
@@ -377,7 +439,6 @@ export default function Admin() {
                               target: 'https://',
                               method: 'GET',
                               probes: config.probes.map((p) => p.id),
-                              timeout: 10000,
                             },
                           ],
                         })
@@ -393,6 +454,7 @@ export default function Admin() {
                       target,
                       method,
                       probes,
+                      intervalSeconds,
                       timeout,
                       notificationTemplateId,
                       ...extras
@@ -441,12 +503,29 @@ export default function Admin() {
                               value={method}
                               onChange={(v) => updateMonitor(index, { method: v ?? 'GET' })}
                             />
+                          </Group>
+                          <Group grow>
                             <NumberInput
-                              label="超时（毫秒）"
+                              label="检测间隔（秒，可选）"
+                              min={MIN_MONITOR_INTERVAL_SECONDS}
+                              max={MAX_MONITOR_INTERVAL_SECONDS}
+                              allowDecimal={false}
+                              allowNegative={false}
+                              placeholder={`${DEFAULT_MONITOR_INTERVAL_SECONDS}（5 分钟）`}
+                              value={intervalSeconds ?? ''}
+                              onChange={(value) =>
+                                updateOptionalMonitor(index, 'intervalSeconds', value)
+                              }
+                            />
+                            <NumberInput
+                              label="超时（毫秒，可选）"
                               min={1}
                               max={120000}
-                              value={timeout ?? 10000}
-                              onChange={(v) => updateMonitor(index, { timeout: Number(v) })}
+                              allowDecimal={false}
+                              allowNegative={false}
+                              placeholder={`${DEFAULT_MONITOR_TIMEOUT_MS}（5 秒）`}
+                              value={timeout ?? ''}
+                              onChange={(value) => updateOptionalMonitor(index, 'timeout', value)}
                             />
                           </Group>
                           <TextInput

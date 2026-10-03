@@ -91,7 +91,7 @@ describe('Cloudflare and external probes share retained D1 results', () => {
     }
     await runCloudflareProbe(env, config.monitors, NOW, 'SIN', check)
     await runCloudflareProbe(env, config.monitors, NOW, 'SIN', check)
-    expect(seen).toEqual(['mixed', 'cf-only', 'mixed', 'cf-only'])
+    expect(seen).toEqual(['mixed', 'cf-only'])
     expect(
       (await env.UPTIMEFLARE_D1.prepare('SELECT COUNT(*) n FROM probe_samples').first<any>()).n
     ).toBe(2)
@@ -110,7 +110,7 @@ describe('Cloudflare and external probes share retained D1 results', () => {
       failureStages: { http: 1 },
     })
     await runCloudflareProbe(env, [config.monitors[2]], NOW + 60, 'SIN', check)
-    expect(seen).toHaveLength(4)
+    expect(seen).toHaveLength(2)
   })
   it('keeps Cloudflare history monotonic when a late cron event finishes', async () => {
     const check = async (monitor: any) => ({

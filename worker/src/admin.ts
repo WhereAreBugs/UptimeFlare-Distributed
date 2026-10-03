@@ -1,3 +1,8 @@
+import {
+  getMonitorIntervalSeconds,
+  MIN_MONITOR_INTERVAL_SECONDS,
+  MAX_MONITOR_INTERVAL_SECONDS,
+} from '../../util/monitor-settings'
 import type { MonitorTarget, NotificationTemplate, WorkerConfig } from '../../types/config'
 import { normalizeInternalIds } from '../../util/internal-id'
 import type { ProbeDefinition } from '../../types/probes'
@@ -122,12 +127,6 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
     value.probes.filter((probe: any) => probe?.id !== CLOUDFLARE_PROBE_ID).length > 32
   )
     throw new AdminInputError('最多 100 个目标、32 个独立探针及 1 个 Cloudflare 探针')
-  if (
-    !Number.isInteger(value.probeStaleAfterSeconds) ||
-    value.probeStaleAfterSeconds < 300 ||
-    value.probeStaleAfterSeconds > 86400
-  )
-    throw new AdminInputError('探针过期时间应为 300–86400 秒')
   const ids = new Set<string>()
   const probes: ProbeDefinition[] = []
   for (const probe of value.probes) {
@@ -282,6 +281,15 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
           throw new AdminInputError('请选择已存在的通知模板')
         result.notificationTemplateId = monitor.notificationTemplateId
       }
+      const intervalSeconds = getMonitorIntervalSeconds(monitor)
+      if (
+        (monitor.intervalSeconds !== undefined && !Number.isInteger(monitor.intervalSeconds)) ||
+        !Number.isInteger(intervalSeconds) ||
+        intervalSeconds < MIN_MONITOR_INTERVAL_SECONDS ||
+        intervalSeconds > MAX_MONITOR_INTERVAL_SECONDS
+      )
+        throw new AdminInputError('检测周期应为 60–86400 秒')
+      result.intervalSeconds = intervalSeconds
       if (monitor.timeout !== undefined) {
         if (!Number.isInteger(monitor.timeout) || monitor.timeout < 1 || monitor.timeout > 120000)
           throw new AdminInputError('超时应为 1–120000 毫秒')
@@ -354,7 +362,6 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
     monitors,
     probes,
     notificationTemplates,
-    probeStaleAfterSeconds: value.probeStaleAfterSeconds,
   }
 }
 

@@ -235,17 +235,15 @@ export default function ProbeMonitorDetail({
   monitor,
   summary,
   now,
-  staleAfterSeconds = 900,
 }: {
   monitor: MonitorTarget
   summary?: ProbeMonitorSummary
   now: number
-  staleAfterSeconds?: number
 }) {
   const { t } = useTranslation('common')
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null)
   const [expandedProbes, setExpandedProbes] = useState<string[]>([])
-  const current = summary ? refreshProbeSummary(summary, now, staleAfterSeconds) : undefined
+  const current = summary ? refreshProbeSummary(summary, now, monitor) : undefined
   const status = current?.status ?? 'unknown'
   const probes = current?.probes ?? monitor.probes?.map(emptyProbe) ?? []
   const totals = {

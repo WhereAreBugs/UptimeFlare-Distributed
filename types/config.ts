@@ -43,6 +43,9 @@ export type MonitorTarget = {
   statusPageLink?: string
   hideLatencyChart?: boolean
   expectedCodes?: number[]
+  /** Per-target check interval in seconds; omitted means five minutes. */
+  intervalSeconds?: number
+  /** Per-check timeout in milliseconds; omitted means five seconds. */
   timeout?: number
   headers?: { [key: string]: string | number }
   body?: string
@@ -55,8 +58,6 @@ export type MonitorTarget = {
 export type WorkerConfig<TEnv = Env> = {
   notificationTemplates?: NotificationTemplate[]
   probes?: ProbeDefinition[]
-  /** An absent or old probe result is unknown; default: 900 seconds. */
-  probeStaleAfterSeconds?: number
   kvWriteCooldownMinutes?: number
   passwordProtection?: string
   monitors: MonitorTarget[]

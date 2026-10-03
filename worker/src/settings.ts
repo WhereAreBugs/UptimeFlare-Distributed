@@ -2,10 +2,7 @@ import type { WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { getProbeDefinitions } from './probe-labels'
 
-export type EditableSettings = Pick<
-  WorkerConfig,
-  'monitors' | 'probes' | 'probeStaleAfterSeconds' | 'notificationTemplates'
->
+export type EditableSettings = Pick<WorkerConfig, 'monitors' | 'probes' | 'notificationTemplates'>
 export type StoredSettings = EditableSettings & { revision: number }
 
 /** Read once per request; D1 is the authoritative source after the first admin save. */
@@ -19,11 +16,11 @@ export async function getSettings(env: ProbeEnv, fallback: WorkerConfig): Promis
         revision: 0,
         monitors: fallback.monitors,
         probes: fallback.probes ?? [],
-        probeStaleAfterSeconds: fallback.probeStaleAfterSeconds ?? 900,
         notificationTemplates: fallback.notificationTemplates ?? [],
       }
   return {
-    ...settings,
+    revision: settings.revision,
+    monitors: settings.monitors,
     notificationTemplates: settings.notificationTemplates ?? [],
     probes: await getProbeDefinitions(env, settings.probes ?? []),
   }
@@ -33,5 +30,10 @@ export async function getRuntimeConfig(
   env: ProbeEnv,
   fallback: WorkerConfig
 ): Promise<WorkerConfig> {
-  return { ...fallback, ...(await getSettings(env, fallback)) }
+  // Older saved/source configurations may contain the retired global TTL. Ignore
+  // it without rewriting settings, changing the revision, or touching credentials.
+  const { probeStaleAfterSeconds: _legacy, ...base } = fallback as WorkerConfig & {
+    probeStaleAfterSeconds?: unknown
+  }
+  return { ...base, ...(await getSettings(env, fallback)) }
 }

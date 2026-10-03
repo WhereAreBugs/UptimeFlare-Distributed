@@ -99,7 +99,7 @@ describe('authenticated probe contract', () => {
     expect(config).toMatchObject({
       version: 1,
       probe_id: 'a',
-      monitors: [{ id: 'web', timeout: 10000, headers: { 'X-Value': '42' } }],
+      monitors: [{ id: 'web', intervalSeconds: 300, timeout: 5000, headers: { 'X-Value': '42' } }],
     })
     expect(config.monitors).toHaveLength(1)
     expect(JSON.stringify(config)).not.toContain(TOKEN_A)

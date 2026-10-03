@@ -1,6 +1,6 @@
 # 外部 Go 探针与多探针汇总
 
-在原 UptimeFlare 的 Worker/Pages 与 D1 架构上添加外部探针。原 Cloudflare 定时检测仍用于未设置 `probes` 的监控；设置该字段的目标由独立 Go 探针负责。服务端不会对同一外部目标重复发起检测。
+在原 UptimeFlare 的 Worker/Pages 与 D1 架构上添加外部探针。原 Cloudflare 定时检测仍用于未设置 `probes` 的监控；设置该字段的目标由分配的 Go 或内置 Cloudflare 探针负责。服务端只检测明确分配给 Cloudflare 的目标。
 
 ## 服务端配置
 
@@ -11,11 +11,12 @@ probes: [
   { id: 'sg', name: 'Singapore', location: 'Singapore / ISP A' },
   { id: 'hk', name: 'Hong Kong', location: 'Hong Kong / ISP B' },
 ],
-probeStaleAfterSeconds: 900, // 可省略，默认 15 分钟
 monitors: [
   {
     id: 'website', name: 'Website', method: 'GET',
     target: 'https://example.com', probes: ['sg', 'hk'],
+    // 两项均可省略：默认检测周期 300 秒、单次超时 5000 毫秒
+    intervalSeconds: 300, timeout: 5000,
   },
   {
     id: 'ssh', name: 'SSH', method: 'TCP_PING',
@@ -45,10 +46,10 @@ monitors: [
 
 ```sh
 cd worker
-npx wrangler d1 execute uptimeflare_d1 --remote --file ../migrations/0001_external_probes.sql
+npx wrangler d1 migrations apply uptimeflare_d1 --remote
 ```
 
-也可以使用 `wrangler d1 migrations apply uptimeflare_d1 --remote`，`worker/wrangler.toml` 已设置迁移目录。先把示例 database ID 换成实际绑定。迁移不更改原 `uptimeflare` 表，不重写原 compact state。
+`worker/wrangler.toml` 已设置迁移目录。先把示例 database ID 换成实际绑定。需包含 `0001`–`0005` 全部迁移；`0005_monitor_schedule.sql` 添加内置与原生目标的调度租约表。迁移不重写原 compact state，也不修改已保存的目标、显式超时或管理配置版本。
 
 本地运行时，分别给 Worker 和 Pages 的本地变量文件设置测试用 `PROBE_TOKENS`；Worker 与 Pages 必须连接相同 D1。Docker 自托管会从容器环境读取变量，需给两者同样的 `PROBE_TOKENS` 并持久化 `.wrangler/state`。
 
@@ -56,9 +57,13 @@ npx wrangler d1 execute uptimeflare_d1 --remote --file ../migrations/0001_extern
 
 公开状态页无需登录。`/admin` 使用独立管理密码，密码和会话签名密钥设置为 Worker/Pages secrets，不写入公开源码。会话使用 Secure、HttpOnly、SameSite=Strict Cookie，8 小时过期；写操作校验同源 Origin，管理 API 不开放 CORS。每个来源地址每 15 分钟最多 10 次登录，D1 仅保存地址哈希。更换管理密码或签名密钥会使已有会话失效。
 
-登录后可以添加、编辑、删除 HTTP/HTTPS/TCP 目标，设置超时、状态码、关键词、请求头、请求体和探针分配，以及编辑探针显示名称、地区和离线超时。页面不显示内部标识；目标和通知模板的标识自动生成并处理冲突，编辑现有目标会保留历史。新探针身份仍需先在 `PROBE_TOKENS` 配置独立令牌，重复的已注册探针条目和目标分配会自动合并。
+登录后可以添加、编辑、删除 HTTP/HTTPS/TCP 目标，设置检测周期、单次超时、状态码、关键词、请求头、请求体和探针分配，以及编辑探针显示名称与地区。页面不显示内部标识；目标和通知模板的标识自动生成并处理冲突，编辑现有目标会保留历史。新探针身份仍需先在 `PROBE_TOKENS` 配置独立令牌，重复的已注册探针条目和目标分配会自动合并。
 
-内置 `cloudflare` 探针无需令牌，在“执行探针”中选择即可。可以仅分配 Cloudflare，也可以同时分配独立 Go 探针；Cloudflare 每分钟通过 Worker 的 cron 直接检测所分配目标，结果写入同一组 D1 样本、累计统计和五分钟历史。未分配给 Cloudflare 的目标不会由该内置探针检测。Cloudflare 不使用目标的历史 proxy 设置；无 probes 的原生监控仍保持原流程。
+内置 `cloudflare` 探针无需令牌，在“执行探针”中选择即可。可以仅分配 Cloudflare，也可以同时分配独立 Go 探针；Worker 的 cron 每分钟检查调度，Cloudflare 仅检测已到达各自周期的目标，结果写入同一组 D1 样本、累计统计和五分钟历史。未分配给 Cloudflare 的目标不会由该内置探针检测。Cloudflare 不使用目标的历史 proxy 设置；无 probes 的原生监控也按目标周期执行，并保留原历史、通知和回调流程。
+
+每个目标的 `intervalSeconds` 为 60–86400 的整数，省略时为 300 秒；`timeout` 仍以毫秒表示，省略时为 5000 毫秒。数据库里已有的显式超时（例如 10000 毫秒）继续生效。离线判定自动使用该目标周期的两倍，恰好达到边界时仍有效，超过边界才显示 `unknown`。旧配置的全局 `probeStaleAfterSeconds` 被忽略，不再出现在管理接口或页面；读取旧记录不会改写目标、令牌、管理密码或配置版本。
+
+新目标和影响检查的配置变更通常在下一次 cron 检测，不等待旧周期；仍在执行的检查完成或租约回收后再检测新配置。cron 的一分钟精度会把非整分钟周期向后推迟不足一分钟；只修改名称或通知模板不会额外检测。D1 租约避免并发或重复 cron 重复检测，检查结果与调度完成状态在同一事务保存；失去租约的旧执行者不能写入结果。内置检查未到期时不请求节点位置，也不更新探针标签。异常终止的租约最长 15 分钟后可回收。原生目标通过共享写入租约保护 compact state，仅有新检查时持久化，通知和新鲜度使用该目标最近的检查时间，不使用其他目标更新的全局时间。
 
 独立探针名称留空时，显示服务端从探针配置请求的 Cloudflare `cf` 元数据获取的公网出口 IP 国家、地区、城市与 ASN，例如 `US / California / Los Angeles · AS64512`。不读取客户端自报的请求头，不依赖第三方 IP 查询服务，也不增加探针网络请求。配置刷新时更新已变化的标签，缺失元数据时保留旧标签，手动名称与地区优先。平台元数据首次获取前显示探针序号；使用代理出口时对应代理公网 IP。
 
@@ -78,9 +83,9 @@ export LIGHT_PROBER_TOKEN=the-token-for-sg
 ./light-prober
 ```
 
-新探针只需这两个配置。服务端下发其分配目标的实际检查配置（包含该目标必需的鉴权头）。公共状态页与 API 只返回显示字段、结果和探针标签，不公开目标 URL、请求体、鉴权头或令牌。接收端只保存已校验的结果字段。
+新探针只需这两个配置。每个目标的检测周期由服务端下发，探针无需单独设置全局检测周期。服务端下发其分配目标的实际检查配置（包含该目标必需的鉴权头）。公共状态页与 API 只返回显示字段、结果和探针标签，不公开目标 URL、请求体、鉴权头或令牌。接收端只保存已校验的结果字段。
 
-默认每分钟检测，每五分钟 gzip 批量推送；因此状态页可能有约五分钟的可见延迟。探测结果先落盘，直到 D1 完成事务、返回匹配批次确认后才删除。每批最多 200 个样本，压缩前后请求体都限制为 512 KiB。保留每次检查的失败阶段，再用五分钟桶汇总，不用平均结果覆盖短暂故障。
+默认按服务端配置每五分钟检测，每五分钟 gzip 批量推送；因此状态页可能有约五分钟的可见延迟。探测结果先落盘，直到 D1 完成事务、返回匹配批次确认后才删除。每批最多 200 个样本，压缩前后请求体都限制为 512 KiB。保留每次检查的失败阶段，再用五分钟桶汇总，不用平均结果覆盖短暂故障。
 
 ## 汇总与故障诊断
 
@@ -101,7 +106,7 @@ Go 探针区分 `dns`、`tcp`、`tls`、`http`、`body`、`configuration`、`unk
 
 当前限制为最多 100 个监控配置、32 个独立令牌以及 1 个内置 Cloudflare 探针、**64 个监控与探针分配组合**，例如 32 个目标各分配 2 个探针。近期历史和失败明细均有界。这是控制 Worker CPU、D1 读取和页面大小的明确限制；更大部署应先做容量测量与分页扩展。
 
-原始样本与汇总保存约 90 天。每分钟 scheduled 任务有界删除过期数据，并同步扣除累积总计；大量历史补传过期后清理可能需要多轮。累计统计反映尚未清理的保留数据。latest 保留最后一次结果，用时间判断过期。
+原始样本与汇总保存约 90 天。每分钟 scheduled 任务有界删除过期数据，并同步扣除累积总计；大量历史补传过期后清理可能需要多轮。累计统计反映尚未清理的保留数据。latest 保留最后一次结果，使用该目标周期的两倍与最后检查时间判断过期。
 
 ## Webhook 通知模板
 
@@ -131,4 +136,4 @@ npm run lint
 npm run build
 ```
 
-Worker 测试使用真实 Miniflare D1，覆盖 gzip、压缩炸弹限制、令牌与目标权限、重复上传、乱序补传、事务失败、累计总计与保留期清理。探针仓库的端到端脚本可与本仓库联合验证完整网络协议。
+Worker 测试使用真实 Miniflare D1，覆盖 gzip、压缩炸弹限制、令牌与目标权限、重复上传、乱序补传、事务失败、累计总计与保留期清理，以及目标周期与超时默认值、旧管理配置兼容、各目标 TTL 边界、cron 并发去重、配置变更调度、旧执行者写入隔离和原生通知新鲜度。探针仓库的端到端脚本可与本仓库联合验证完整网络协议。

@@ -14,7 +14,6 @@ const fallback: WorkerConfig = {
   monitors: [
     { id: 'web', name: 'Web', target: 'https://initial.example', method: 'GET', probes: ['a'] },
   ],
-  probeStaleAfterSeconds: 900,
 }
 const TOKEN = 'independent-probe-a-secret-123456'
 let address = 0

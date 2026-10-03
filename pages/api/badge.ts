@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
 import { getProbeSummaries } from '@/worker/src/probes'
 import type { MonitorStatus } from '@/util/probe-status'
+import { getMonitorStaleAfterSeconds } from '@/util/monitor-settings'
 
 export const runtime = 'edge'
 
@@ -62,8 +63,7 @@ export default async function handler(req: NextRequest): Promise<Response> {
         process.env as any,
         [monitor],
         workerConfig.probes,
-        Math.round(Date.now() / 1000),
-        workerConfig.probeStaleAfterSeconds
+        Math.round(Date.now() / 1000)
       )
       status = summaries[monitor.id].status
     } else {
@@ -74,8 +74,11 @@ export default async function handler(req: NextRequest): Promise<Response> {
       const lastIncident = incidentCount
         ? compactedState.getIncident(monitorId, incidentCount - 1)
         : null
-      if (compactedState.latencyLen(monitorId) && lastIncident)
-        status = lastIncident.end === null ? 'down' : 'up'
+      if (compactedState.latencyLen(monitorId) && lastIncident) {
+        const latest = compactedState.getLastLatency(monitorId).time
+        if (Math.floor(Date.now() / 1000) - latest <= getMonitorStaleAfterSeconds(monitor))
+          status = lastIncident.end === null ? 'down' : 'up'
+      }
     }
 
     const badge: BadgePayload = {

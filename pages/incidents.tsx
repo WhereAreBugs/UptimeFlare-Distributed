@@ -221,8 +221,7 @@ export async function getServerSideProps() {
     process.env as any,
     workerConfig.monitors,
     workerConfig.probes,
-    Math.round(Date.now() / 1000),
-    workerConfig.probeStaleAfterSeconds
+    Math.round(Date.now() / 1000)
   )
   const probeFailures = Object.values(summaries)
     .flatMap((summary) =>

@@ -1,5 +1,6 @@
 import type { MonitorState, MonitorTarget } from '../types/config'
 import type { ProbeHistoryBucket, ProbeMonitorSummary, ProbeSummary } from '../types/probes'
+import { getMonitorStaleAfterSeconds } from './monitor-settings'
 
 export type MonitorStatus = 'up' | 'degraded' | 'down' | 'unknown'
 
@@ -79,8 +80,9 @@ export function summarizeProbeHistory(
 export function refreshProbeSummary(
   summary: ProbeMonitorSummary,
   now: number,
-  staleAfterSeconds = 900
+  monitor: Pick<MonitorTarget, 'intervalSeconds'> = {}
 ): ProbeMonitorSummary {
+  const staleAfterSeconds = getMonitorStaleAfterSeconds(monitor)
   const probes = summary.probes.map((probe) => {
     const stale = probe.stale || (probe.latest !== null && now - probe.latest > staleAfterSeconds)
     return {
@@ -107,14 +109,15 @@ export function getMonitorStatus(
   monitor: MonitorTarget,
   state: MonitorState,
   summaries: Record<string, ProbeMonitorSummary>,
-  now: number,
-  staleAfterSeconds = 900
+  now: number
 ): MonitorStatus {
   if (monitor.probes?.length) {
     const summary = summaries[monitor.id]
-    return summary ? refreshProbeSummary(summary, now, staleAfterSeconds).status : 'unknown'
+    return summary ? refreshProbeSummary(summary, now, monitor).status : 'unknown'
   }
   if (!state.latency[monitor.id]?.length || !state.incident[monitor.id]?.length) return 'unknown'
+  const latency = state.latency[monitor.id].slice(-1)[0]
+  if (now - latency.time > getMonitorStaleAfterSeconds(monitor)) return 'unknown'
   const incident = state.incident[monitor.id]?.slice(-1)[0]
   return incident?.end === null ? 'down' : 'up'
 }
@@ -123,13 +126,14 @@ export function summarizeMonitors(
   monitors: MonitorTarget[],
   state: MonitorState,
   summaries: Record<string, ProbeMonitorSummary>,
-  now: number,
-  staleAfterSeconds = 900
+  now: number
 ) {
   const counts = { up: 0, down: 0, degraded: 0, unknown: 0, total: monitors.length, lastUpdate: 0 }
   for (const monitor of monitors) {
-    counts[getMonitorStatus(monitor, state, summaries, now, staleAfterSeconds)]++
-    const latest = monitor.probes?.length ? summaries[monitor.id]?.latest : state.lastUpdate
+    counts[getMonitorStatus(monitor, state, summaries, now)]++
+    const latest = monitor.probes?.length
+      ? summaries[monitor.id]?.latest
+      : state.latency[monitor.id]?.slice(-1)[0]?.time
     counts.lastUpdate = Math.max(counts.lastUpdate, latest ?? 0)
   }
   return counts

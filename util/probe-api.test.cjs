@@ -13,6 +13,14 @@ diagnosticModule._compile(
   }).outputText,
   diagnosticFilename
 )
+const settingsFilename = path.resolve(__dirname, 'monitor-settings.ts')
+const settingsModule = new Module(settingsFilename, module)
+settingsModule._compile(
+  ts.transpileModule(fs.readFileSync(settingsFilename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText,
+  settingsFilename
+)
 
 function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeIncident = null) {
   const calls = { nativeReads: 0, probeReads: 0 }
@@ -36,6 +44,7 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
     }
   }
   const mocks = {
+    '@/util/monitor-settings': settingsModule.exports,
     '@/worker/src/diagnostics': diagnosticModule.exports,
     '@/worker/src/settings': { getRuntimeConfig: async () => workerConfig },
     '@/uptime.config': { workerConfig, maintenances: [] },
@@ -123,7 +132,13 @@ test('native public errors expose phase fields and preserve historical message t
     ['A historical error without reliable phase evidence', 'unknown', 'unknown'],
   ]) {
     const incident = { start: [1000], end: null, error: [message] }
-    const { handler } = loadHandler('data', { monitors: [native] }, {}, 1100, incident)
+    const { handler } = loadHandler(
+      'data',
+      { monitors: [native] },
+      {},
+      Math.floor(Date.now() / 1000),
+      incident
+    )
     const value = await (await handler(request('/api/data'))).json()
     assert.equal(value.monitors.host.stage, stage)
     assert.equal(value.monitors.host.code, code)
@@ -194,4 +209,25 @@ test('unconfigured and empty native badges avoid out-of-bounds incident lookups'
   const value = await (await handler(request('/api/badge?id=host'))).json()
   assert.equal(value.message, 'UNKNOWN')
   assert.equal(value.color, 'lightgrey')
+})
+
+test('native data and badges use the target interval for freshness', async (t) => {
+  const now = 1_800_000
+  t.mock.method(Date, 'now', () => now * 1000)
+  const incident = { start: [now - 500], end: now - 500, error: [] }
+  for (const [intervalSeconds, age, expectedStatus, expectedBadge] of [
+    [60, 120, 'up', 'UP'],
+    [60, 121, 'unknown', 'UNKNOWN'],
+    [600, 121, 'up', 'UP'],
+    [undefined, 601, 'unknown', 'UNKNOWN'],
+  ]) {
+    const monitor = { ...external, probes: undefined, intervalSeconds }
+    const data = loadHandler('data', { monitors: [monitor] }, {}, now - age, incident)
+    const value = await (await data.handler(request('/api/data'))).json()
+    assert.equal(value.monitors.host.status, expectedStatus)
+    assert.equal(value.updatedAt, now - age)
+    const badge = loadHandler('badge', { monitors: [monitor] }, {}, now - age, incident)
+    const badgeValue = await (await badge.handler(request('/api/badge?id=host'))).json()
+    assert.equal(badgeValue.message, expectedBadge)
+  }
 })

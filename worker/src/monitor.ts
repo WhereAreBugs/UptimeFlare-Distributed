@@ -1,3 +1,4 @@
+import { DEFAULT_MONITOR_TIMEOUT_MS } from '../../util/monitor-settings'
 import { Env } from '.'
 import { MonitorTarget } from '../../types/config'
 import { withTimeout, fetchTimeout } from './util'
@@ -211,7 +212,7 @@ export async function getStatusWithGlobalPing(
     const pollStart = Date.now()
     let measurementResult: any
     while (true) {
-      if (Date.now() - pollStart > (monitor.timeout ?? 10000) + 2000) {
+      if (Date.now() - pollStart > (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS) + 2000) {
         // 2s extra buffer
         throw 'api polling timeout'
       }
@@ -287,7 +288,7 @@ export async function getStatusWithGlobalPing(
     return {
       location: 'ERROR',
       status: {
-        ping: diagnostic.code === 'timeout' ? monitor.timeout ?? 10000 : 0,
+        ping: diagnostic.code === 'timeout' ? monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS : 0,
         up: false,
         err: formatNativeDiagnostic(diagnostic),
         stage: diagnostic.stage,
@@ -318,7 +319,7 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
       socket = connected
 
       // Now we have an `opened` promise!
-      await withTimeout(monitor.timeout || 10000, connected.opened)
+      await withTimeout(monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS, connected.opened)
 
       console.log(`${monitor.name} connected successfully`)
 
@@ -329,7 +330,7 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
       const diagnostic = classifyNativeFailure(e, 'tcp')
       console.log(`${monitor.name} failed: ${formatNativeDiagnostic(diagnostic)}`)
       if (diagnostic.code === 'timeout') {
-        status.ping = monitor.timeout || 10000
+        status.ping = monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS
       }
       status.up = false
       status.err = formatNativeDiagnostic(diagnostic)
@@ -354,23 +355,27 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
         headers.set('user-agent', 'UptimeFlare/1.0 (+https://github.com/lyc8503/UptimeFlare)')
       }
 
-      const response = await fetchTimeout(monitor.target, monitor.timeout || 10000, {
-        method: monitor.method,
-        headers: headers,
-        body: monitor.body,
-        redirect: 'manual',
-        cf: {
-          cacheTtlByStatus: {
-            '100-599': -1, // Don't cache any status code, from https://developers.cloudflare.com/workers/runtime-apis/request/#requestinitcfproperties
+      const response = await fetchTimeout(
+        monitor.target,
+        monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+        {
+          method: monitor.method,
+          headers: headers,
+          body: monitor.body,
+          redirect: 'manual',
+          cf: {
+            cacheTtlByStatus: {
+              '100-599': -1, // Don't cache any status code, from https://developers.cloudflare.com/workers/runtime-apis/request/#requestinitcfproperties
+            },
           },
-        },
-      })
+        }
+      )
 
       console.log(`${monitor.name} responded with ${response.status}`)
       status.ping = Date.now() - startTime
 
       const err = await httpResponseBasicCheck(monitor, response.status, () =>
-        readBoundedBody(response, startTime + (monitor.timeout || 10000))
+        readBoundedBody(response, startTime + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS))
       )
       try {
         await response.body?.cancel()
@@ -385,7 +390,7 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
       const diagnostic = classifyNativeFailure(e, 'http')
       console.log(`${monitor.name} failed: ${formatNativeDiagnostic(diagnostic)}`)
       if (diagnostic.code === 'timeout') {
-        status.ping = monitor.timeout || 10000
+        status.ping = monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS
       }
       status.up = false
       status.err = formatNativeDiagnostic(diagnostic)
@@ -422,11 +427,15 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
       } else if (monitor.checkProxy.startsWith('globalping://')) {
         resp = await getStatusWithGlobalPing(monitor)
       } else {
-        const response = await fetchTimeout(monitor.checkProxy, monitor.timeout || 10000, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(monitor),
-        })
+        const response = await fetchTimeout(
+          monitor.checkProxy,
+          monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(monitor),
+          }
+        )
         if (!response.ok) throw new Error('Check proxy returned an unsuccessful HTTP response')
         resp = await response.json<{ location: string; status: NativeCheckStatus }>()
       }
