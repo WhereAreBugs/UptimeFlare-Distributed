@@ -40,4 +40,6 @@
 
 ## ⚡快速入门 / 📄文档
 
-请参阅 [Wiki](https://github.com/lyc8503/UptimeFlare/wiki)
+本分布式版本请参阅 [部署、网页管理与外部探针说明](docs/external-probes.md)。[原项目 Wiki](https://github.com/lyc8503/UptimeFlare/wiki) 描述上游版本。
+
+向本版 `main` 推送已审查的修改会自动部署。上游更新通过分支中的 Git 合并与审查引入；原项目的整仓覆盖式同步流程已移除，以保留分布式接收、网页管理和部署功能。网页保存的 D1 配置不会被重新部署覆盖。

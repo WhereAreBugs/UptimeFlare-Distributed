@@ -47,11 +47,11 @@ Some screenshots:
 
 ## ⚡Quickstart / 📄Documentation
 
-Please refer to [Wiki](https://github.com/lyc8503/UptimeFlare/wiki)
+For this distributed edition, see [deployment and external probes](docs/external-probes.md). The original [Wiki](https://github.com/lyc8503/UptimeFlare/wiki) describes the upstream version.
 
 ## 🚀Upgrade existing deployments
 
-Get the latest features right away with [simple upgrade process](https://github.com/lyc8503/UptimeFlare/wiki/Synchronize-updates-from-upstream)
+Push reviewed changes to `main` to deploy this edition. Bring upstream changes in through a reviewed Git merge; the original whole-repository replacement workflow was removed because it would discard distributed ingestion, web administration, and deployment automation. D1 web configuration survives redeployment.
 
 ## ⚙️Docs for developer
 
