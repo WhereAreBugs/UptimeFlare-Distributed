@@ -1,6 +1,7 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { IconArrowLeft } from '@tabler/icons-react'
 import {
   Alert,
   Button,
@@ -159,7 +160,30 @@ export default function Admin() {
       <Container size="md" py="xl">
         <Group justify="space-between" mb="lg">
           <Title order={2}>配置管理</Title>
-          <Link href="/">返回公开状态页</Link>
+          <Group gap="xs">
+            {config && (
+              <Button
+                variant="subtle"
+                disabled={busy}
+                onClick={() =>
+                  void action(async () => {
+                    await api('logout', 'POST')
+                    setConfig(null)
+                  })
+                }
+              >
+                退出登录
+              </Button>
+            )}
+            <Button
+              component={Link}
+              href="/"
+              variant="default"
+              leftSection={<IconArrowLeft size={16} />}
+            >
+              返回
+            </Button>
+          </Group>
         </Group>
         {error && (
           <Alert color="red" mb="md">
@@ -202,26 +226,6 @@ export default function Admin() {
           </Paper>
         ) : (
           <Stack>
-            <Group justify="space-between">
-              <Text c="dimmed">配置版本 {config.revision}</Text>
-              <Group>
-                <Button variant="default" disabled={busy} onClick={() => void action(load)}>
-                  重新加载
-                </Button>
-                <Button
-                  variant="subtle"
-                  disabled={busy}
-                  onClick={() =>
-                    void action(async () => {
-                      await api('logout', 'POST')
-                      setConfig(null)
-                    })
-                  }
-                >
-                  退出登录
-                </Button>
-              </Group>
-            </Group>
             <Tabs defaultValue="monitors" keepMounted={false}>
               <Tabs.List grow aria-label="配置板块">
                 <Tabs.Tab value="monitors">监控目标</Tabs.Tab>
