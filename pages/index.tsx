@@ -2,7 +2,8 @@ import Head from 'next/head'
 
 import { Inter } from 'next/font/google'
 import { MonitorTarget, PageConfig, MaintenanceConfig } from '@/types/config'
-import { maintenances as initialMaintenances, pageConfig as initialPage } from '@/uptime.config'
+const initialMaintenances: MaintenanceConfig[] = []
+const initialPage: PageConfig = { title: 'Status' }
 import OverallStatus from '@/components/OverallStatus'
 import Header from '@/components/Header'
 import MonitorList from '@/components/MonitorList'
@@ -11,13 +12,12 @@ import MonitorDetail from '@/components/MonitorDetail'
 import Footer from '@/components/Footer'
 import { useTranslation } from 'react-i18next'
 import { CompactedMonitorStateWrapper } from '@/worker/src/store'
-import { getPublicDashboard } from '@/worker/src/public-dashboard'
+import { usePublicDashboard } from '@/components/usePublicDashboard'
 import { visiblePublicMonitors } from '@/util/public-monitor-list'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import { summarizeDashboardMonitors } from '@/util/dashboard-status'
 import { useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/router'
-import { getMonitorIntervalSeconds } from '@/util/monitor-settings'
+
 import { expandMaintenances } from '@/util/maintenance'
 import {
   guardPublicSnapshot,
@@ -26,10 +26,9 @@ import {
 } from '@/util/public-snapshot'
 import PublicSnapshotNotice from '@/components/PublicSnapshotNotice'
 
-export const runtime = 'experimental-edge'
 const inter = Inter({ subsets: ['latin'] })
 
-export default function Home({
+function Dashboard({
   compactedStateStr,
   monitors,
   probeSummaries = {},
@@ -49,7 +48,7 @@ export default function Home({
   nativeHistoryLoaded?: boolean
 } & PublicSnapshotMetadata) {
   const { t } = useTranslation('common')
-  const router = useRouter()
+
   const rawState = useMemo(
     () => new CompactedMonitorStateWrapper(compactedStateStr).uncompact(),
     [compactedStateStr]
@@ -90,31 +89,6 @@ export default function Home({
       document.removeEventListener('visibilitychange', updateTime)
     }
   }, [])
-  useEffect(() => {
-    if (!router.isReady) return
-    let refreshing = false
-    const refresh = async () => {
-      if (document.hidden || refreshing) return
-      refreshing = true
-      try {
-        await router.replace(router.asPath, undefined, { scroll: false })
-      } catch {
-        // A failed page refresh must not erase the last available history.
-      } finally {
-        refreshing = false
-      }
-    }
-    const onVisible = () => {
-      if (!document.hidden) void refresh()
-    }
-    const refreshEverySeconds = Math.min(300, ...activeMonitors.map(getMonitorIntervalSeconds))
-    const timer = setInterval(() => void refresh(), refreshEverySeconds * 1000)
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-  }, [router, activeMonitors])
   const aggregate = summarizeDashboardMonitors(monitors, state, summaries, maintenances, now)
   const snapshot = { snapshotAt, stale: snapshotUnavailable, snapshotIncomplete }
 
@@ -177,14 +151,8 @@ export default function Home({
   )
 }
 
-export async function getServerSideProps() {
-  const { workerConfig: fallbackConfig } = await import('@/uptime.config')
-  const dashboard = await getPublicDashboard(process.env as any, fallbackConfig)
-
-  return {
-    props: {
-      ...dashboard,
-      nativeHistoryLoaded: false,
-    },
-  }
+export default function Home() {
+  const { dashboard, error } = usePublicDashboard()
+  if (!dashboard) return <Text p="md">{error ? '状态暂时不可用，正在重试…' : '正在加载…'}</Text>
+  return <Dashboard {...dashboard} nativeHistoryLoaded={false} />
 }

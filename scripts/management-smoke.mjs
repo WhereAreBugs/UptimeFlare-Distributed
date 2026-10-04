@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Exercise the actual next-on-pages artifact, with disposable D1 and dummy credentials only. */
+/** Exercise the actual unified Worker artifact, with disposable D1 and dummy credentials only. */
 import assert from 'node:assert/strict'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -8,8 +8,8 @@ import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const staticRoot = join(root, '.vercel/output/static')
-const artifact = join(staticRoot, '_worker.js/index.js')
+const staticRoot = join(root, 'out')
+const artifact = join(root, '.deployment/unified-worker/index.js')
 const { Miniflare } = await import(
   pathToFileURL(join(root, 'worker/node_modules/miniflare/dist/src/index.js'))
 )
@@ -37,12 +37,12 @@ const sources = (
 )
   .flat()
   .filter((path) => /\.(?:ts|tsx)$/.test(path))
-  .concat(join(root, 'middleware.ts'), join(root, 'uptime.config.ts'))
+  .concat(join(root, 'compat/middleware.ts'), join(root, 'uptime.config.ts'))
 assert.ok(
   (await Promise.all(sources.map((path) => stat(path)))).every(
     (value) => value.mtimeMs <= artifactTime
   ),
-  'Build a fresh next-on-pages artifact before running the management smoke test'
+  'Build a fresh unified Worker artifact before running the management smoke test'
 )
 const mf = new Miniflare({
   modules: (await files(dirname(artifact)))
@@ -425,7 +425,7 @@ try {
   assert.equal(response.headers.get('Cache-Control'), 'no-store')
   assert.ok(!response.headers.has('Access-Control-Allow-Origin'))
   console.log(
-    `Management Pages artifact smoke passed (${checks} HTTP assertions plus D1 and privacy checks).`
+    `Management Worker artifact smoke passed (${checks} HTTP assertions plus D1 and privacy checks).`
   )
 
   if (process.argv.includes('--preview')) {

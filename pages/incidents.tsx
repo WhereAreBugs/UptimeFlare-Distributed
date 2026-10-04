@@ -1,7 +1,8 @@
 import Head from 'next/head'
 import { Inter } from 'next/font/google'
 import type { MaintenanceConfig, MonitorTarget, PageConfig } from '@/types/config'
-import { maintenances as fallbackMaintenances, pageConfig } from '@/uptime.config'
+const fallbackMaintenances: MaintenanceConfig[] = []
+const pageConfig: PageConfig = { title: 'Status' }
 import Header from '@/components/Header'
 import {
   Alert,
@@ -20,13 +21,13 @@ import { useEffect, useRef, useState } from 'react'
 import MaintenanceAlert from '@/components/MaintenanceAlert'
 import NoIncidentsAlert from '@/components/NoIncidents'
 import { useTranslation } from 'react-i18next'
-import { getProbeIncidents } from '@/worker/src/probes'
-import { getNativeIncidents } from '@/worker/src/incident-history'
+import { usePublicDashboard } from '@/components/usePublicDashboard'
+
 import type { NativeIncidentPage, ProbeIncidentPage } from '@/types/probes'
-import { expandMaintenances, getPresentationSettings } from '@/util/maintenance'
+import { expandMaintenances } from '@/util/maintenance'
 
 type HistoryPage = { probes: ProbeIncidentPage | null; native: NativeIncidentPage | null }
-export const runtime = 'experimental-edge'
+
 const inter = Inter({ subsets: ['latin'] })
 
 function currentMonth() {
@@ -55,7 +56,7 @@ function historyURL(month: string, monitor: string | null, kind = 'all', cursor?
   return `/api/incidents?${search}`
 }
 
-export default function IncidentsPage({
+function IncidentsPage({
   monitors,
   page = pageConfig,
   maintenances = fallbackMaintenances,
@@ -77,7 +78,7 @@ export default function IncidentsPage({
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState<string | null>(null)
   const [error, setError] = useState(false)
-  const initialKey = useRef(`${initialMonth}\0${initialMonitor}`)
+  const initialKey = useRef('')
   const currentSelection = useRef(`${selectedMonth}\0${selectedMonitor || ''}`)
   currentSelection.current = `${selectedMonth}\0${selectedMonitor || ''}`
 
@@ -370,38 +371,14 @@ export default function IncidentsPage({
   )
 }
 
-export async function getServerSideProps(context: {
-  query: Record<string, string | string[] | undefined>
-}) {
-  const { workerConfig: fallbackConfig } = await import('@/uptime.config')
-  const { getRuntimeConfig } = await import('@/worker/src/settings')
-  const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
-  const { page, maintenances } = getPresentationSettings(workerConfig)
-  const monitors = workerConfig.monitors.map((monitor) => ({
-    id: monitor.id,
-    name: monitor.name,
-    ...(monitor.probes?.length && { probes: monitor.probes }),
-  })) as MonitorTarget[]
-  const requested = context.query.monitor
-  const initialMonitor =
-    typeof requested === 'string' && monitors.some((monitor) => monitor.id === requested)
-      ? requested
-      : ''
-  const initialMonth = currentMonth()
-  const range = monthRange(initialMonth)
-  const query = { ...range, monitorId: initialMonitor || undefined }
-  const [probes, native] = await Promise.all([
-    getProbeIncidents(process.env as any, workerConfig.monitors, workerConfig.probes, query),
-    getNativeIncidents(process.env as any, workerConfig.monitors, query),
-  ])
-  return {
-    props: {
-      monitors,
-      page,
-      maintenances,
-      initialMonth,
-      initialMonitor,
-      initialHistory: { probes, native },
-    },
-  }
+export default function Incidents() {
+  const { dashboard, error } = usePublicDashboard()
+  if (!dashboard) return <Text p="md">{error ? '状态暂时不可用，正在重试…' : '正在加载…'}</Text>
+  return (
+    <IncidentsPage
+      monitors={dashboard.monitors}
+      page={dashboard.page}
+      maintenances={dashboard.maintenances}
+    />
+  )
 }

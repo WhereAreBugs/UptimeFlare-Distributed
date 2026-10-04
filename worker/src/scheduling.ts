@@ -20,7 +20,7 @@ type ScheduleRow = {
 }
 
 /** Only check-affecting options invalidate a target's schedule; labels and webhooks do not. */
-async function scheduleInputs(monitors: MonitorTarget[]) {
+export async function scheduleInputs(monitors: MonitorTarget[]) {
   return Promise.all(
     monitors.map(async (monitor) => {
       const interval = getMonitorIntervalSeconds(monitor)
@@ -45,7 +45,9 @@ async function scheduleInputs(monitors: MonitorTarget[]) {
         responseForbiddenKeyword: monitor.responseForbiddenKeyword,
         checkProxy: monitor.checkProxy,
         checkProxyFallback: monitor.checkProxyFallback,
-        checkProxyHeaders: Object.entries(monitor.checkProxyHeaders ?? {}).sort(([a],[b]) => a.localeCompare(b)),
+        checkProxyHeaders: Object.entries(monitor.checkProxyHeaders ?? {}).sort(([a], [b]) =>
+          a.localeCompare(b)
+        ),
         icmpProxyURL: monitor.icmpProxyURL,
         certificateExpiryDays: monitor.certificateExpiryDays,
       })
@@ -65,7 +67,7 @@ export async function hasDueMonitors(
   time: number,
   now = time
 ) {
-  monitors = monitors.filter(monitor => !monitor.paused)
+  monitors = monitors.filter((monitor) => !monitor.paused)
   if (!monitors.length) return false
   const inputs = await scheduleInputs(monitors)
   const rows = await env.UPTIMEFLARE_D1.prepare(
@@ -99,24 +101,26 @@ export async function claimScheduledMonitors(
   scopeLimit = MAX_SCHEDULED_TARGETS_PER_CRON
 ): Promise<ScheduledClaim> {
   const key = crypto.randomUUID()
-  monitors = monitors.filter(monitor => !monitor.paused)
+  monitors = monitors.filter((monitor) => !monitor.paused)
   if (!monitors.length) return { monitors: [], scope, key, time }
   const inputs = await scheduleInputs(monitors)
   // Reserve a minute for persistence; a preceding native/Cloudflare batch shares the same Cron lifetime.
-  const timeoutSeconds = Math.ceil(Math.max(...monitors.map(m => m.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)) / 1000)
+  const timeoutSeconds = Math.ceil(
+    Math.max(...monitors.map((m) => m.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)) / 1000
+  )
   const budgetSeconds = Math.max(0, 840 - Math.max(0, now - time))
-  const batchLimit = Math.min(MAX_SCHEDULED_TARGETS_PER_CRON, scopeLimit, budget?.remaining ?? MAX_SCHEDULED_TARGETS_PER_CRON,
-    Math.floor(budgetSeconds / timeoutSeconds) * 5)
+  const batchLimit = Math.min(
+    MAX_SCHEDULED_TARGETS_PER_CRON,
+    scopeLimit,
+    budget?.remaining ?? MAX_SCHEDULED_TARGETS_PER_CRON,
+    Math.floor(budgetSeconds / timeoutSeconds) * 5
+  )
   if (!batchLimit) return { monitors: [], scope, key, time }
   // Scheduled Workers have a 15 minute lifetime. A dead invocation can be reclaimed
   // after this bounded lease; the token fences any unexpectedly late completion.
   const leaseSeconds = Math.min(
     900,
-    Math.max(
-      120,
-      timeoutSeconds * Math.ceil(Math.min(monitors.length, batchLimit) / 5) +
-        60
-    )
+    Math.max(120, timeoutSeconds * Math.ceil(Math.min(monitors.length, batchLimit) / 5) + 60)
   )
   const claimed = await env.UPTIMEFLARE_D1.prepare(
     `INSERT INTO monitor_schedule
@@ -136,7 +140,20 @@ export async function claimScheduledMonitors(
        monitor_schedule.last_completed_at + (SELECT json_extract(value,'$.interval') FROM json_each(?) WHERE json_extract(value,'$.id')=monitor_schedule.monitor_id) <= excluded.last_started_at)
     RETURNING monitor_id`
   )
-    .bind(scope, time, now + leaseSeconds, key, JSON.stringify(inputs), scope, time, now, time, batchLimit, now, JSON.stringify(inputs))
+    .bind(
+      scope,
+      time,
+      now + leaseSeconds,
+      key,
+      JSON.stringify(inputs),
+      scope,
+      time,
+      now,
+      time,
+      batchLimit,
+      now,
+      JSON.stringify(inputs)
+    )
     .all<{ monitor_id: string }>()
   if (!claimed.success) throw new Error('Monitor schedule claim failed')
   if (budget) budget.remaining -= claimed.results.length
@@ -150,18 +167,28 @@ export function completeScheduledClaim(
   nativeWriter?: string
 ): D1PreparedStatement {
   return env.UPTIMEFLARE_D1.prepare(
-    `UPDATE monitor_schedule SET last_completed_at=?,lease_until=0,lease_key='' WHERE scope=? AND lease_key=?${
+    `UPDATE monitor_schedule SET last_completed_at=?,lease_until=0,lease_key='' WHERE scope=? AND lease_key=? AND monitor_id IN (SELECT value FROM json_each(?))${
       nativeWriter
         ? " AND EXISTS (SELECT 1 FROM monitor_schedule writer WHERE writer.scope='native-writer' AND writer.monitor_id='state' AND writer.lease_key=?)"
         : ''
     }`
-  ).bind(claim.time, claim.scope, claim.key, ...(nativeWriter ? [nativeWriter] : []))
-}
-export async function releaseScheduledClaim(env: ProbeEnv, claim: ScheduledClaim) {
-  await env.UPTIMEFLARE_D1.prepare(
-    "UPDATE monitor_schedule SET lease_until=0,lease_key='' WHERE scope=? AND lease_key=?"
+  ).bind(
+    claim.time,
+    claim.scope,
+    claim.key,
+    JSON.stringify(claim.monitors.map((m) => m.id)),
+    ...(nativeWriter ? [nativeWriter] : [])
   )
-    .bind(claim.scope, claim.key)
+}
+export async function releaseScheduledClaim(
+  env: ProbeEnv,
+  claim: ScheduledClaim,
+  preserve: string[] = []
+) {
+  await env.UPTIMEFLARE_D1.prepare(
+    "UPDATE monitor_schedule SET lease_until=0,lease_key='' WHERE scope=? AND lease_key=? AND monitor_id NOT IN (SELECT value FROM json_each(?))"
+  )
+    .bind(claim.scope, claim.key, JSON.stringify(preserve))
     .run()
 }
 
@@ -197,6 +224,8 @@ export async function cleanupMonitorSchedules(env: ProbeEnv, monitors: MonitorTa
         WHERE config.id=1 AND json_extract(monitor.value,'$.id')=schedule.monitor_id
           AND COALESCE(json_extract(monitor.value,'$.paused'),0)=0) LIMIT 1000)`
   )
-    .bind(JSON.stringify(monitors.filter(monitor => !monitor.paused).map((monitor) => monitor.id)))
+    .bind(
+      JSON.stringify(monitors.filter((monitor) => !monitor.paused).map((monitor) => monitor.id))
+    )
     .run()
 }

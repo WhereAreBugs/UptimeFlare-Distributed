@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "preview": "npx @cloudflare/next-on-pages && wrangler pages dev .vercel/output/static",
+    "preview": "npm run build && wrangler dev --config worker/wrangler.toml",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "build:worker": "wrangler deploy --dry-run --config worker/wrangler.toml --outdir .deployment/unified-worker"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",

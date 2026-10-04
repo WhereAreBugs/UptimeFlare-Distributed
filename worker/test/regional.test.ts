@@ -1,0 +1,68 @@
+import { expect, it, vi } from 'vitest'
+import { RegionalExecutor, validateRegionalResponse, type RegionalRequest } from '../src/regional'
+const targets = Array.from({ length: 10 }, (_, i) => ({
+  id: 't' + i,
+  name: 'Target',
+  target: 'https://example.org',
+  method: 'GET',
+}))
+async function request(runId = 'run'): Promise<RegionalRequest> {
+  const configVersion = Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(targets)))
+    ),
+    (b) => b.toString(16).padStart(2, '0')
+  ).join('')
+  return { version: 1, runId, configVersion, monitors: targets }
+}
+it('bounds overlapping RPCs by the instance queue and caches successful location', async () => {
+  let active = 0,
+    peak = 0
+  const locate = vi.fn(async () => 'SIN')
+  const executor = new RegionalExecutor(async () => {
+    peak = Math.max(peak, ++active)
+    await new Promise((r) => setTimeout(r, 2))
+    active--
+    return { up: true, ping: 0, err: '' }
+  }, locate)
+  const a = await request('a'),
+    b = await request('b')
+  const [ra, rb] = await Promise.all([executor.checkBatch(a), executor.checkBatch(b)])
+  expect(peak).toBe(5)
+  expect(locate).toHaveBeenCalledTimes(1)
+  expect(validateRegionalResponse(ra, a)).toHaveLength(10)
+  expect(validateRegionalResponse(rb, b)).toHaveLength(10)
+})
+it('cools down location failures without turning successful targets DOWN', async () => {
+  const locate = vi.fn(async () => {
+    throw new Error('location service')
+  })
+  const executor = new RegionalExecutor(async () => ({ up: true, ping: 1, err: '' }), locate)
+  const value = await executor.checkBatch(await request())
+  expect(value.results.every((r) => r.status.up)).toBe(true)
+  expect(locate).toHaveBeenCalledTimes(1)
+  await executor.checkBatch(await request('second'))
+  expect(locate).toHaveBeenCalledTimes(1)
+})
+it('allows reordered results and rejects duplicates, missing targets, versions and invalid numbers', async () => {
+  const req = await request(),
+    executor = new RegionalExecutor(
+      async () => ({ up: true, ping: 1, err: '' }),
+      async () => 'SIN'
+    )
+  const response = await executor.checkBatch(req)
+  expect(
+    validateRegionalResponse({ ...response, results: [...response.results].reverse() }, req)
+  ).toHaveLength(10)
+  for (const bad of [
+    { ...response, version: 2 },
+    { ...response, runId: 'wrong' },
+    { ...response, results: response.results.slice(1) },
+    { ...response, results: response.results.map(() => response.results[0]) },
+    {
+      ...response,
+      results: response.results.map((r) => ({ ...r, status: { ...r.status, ping: NaN } })),
+    },
+  ])
+    expect(() => validateRegionalResponse(bad, req)).toThrow()
+})

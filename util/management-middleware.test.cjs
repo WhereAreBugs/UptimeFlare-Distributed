@@ -6,14 +6,14 @@ const vm = require('node:vm')
 const ts = require('typescript')
 
 const code = ts.transpileModule(
-  fs.readFileSync(path.join(__dirname, '..', 'middleware.ts'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '..', 'compat/middleware.ts'), 'utf8'),
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
 ).outputText
 const scope = {
   exports: {},
   btoa: (value) => Buffer.from(value).toString('base64'),
   require: (name) => {
-    if (name === './uptime.config')
+    if (name === '../uptime.config')
       return { workerConfig: { passwordProtection: 'fixture:password' } }
     if (name === 'next/server')
       return {

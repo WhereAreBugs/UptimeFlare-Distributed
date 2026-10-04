@@ -446,17 +446,11 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
       const deadline = Date.now() + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)
       if (monitor.checkProxy.startsWith('worker://')) {
         const doLoc = monitor.checkProxy.replace('worker://', '')
-        const doId = env.REMOTE_CHECKER_DO.idFromName(JSON.stringify([monitor.id, doLoc]))
+        const doId = env.REMOTE_CHECKER_DO.idFromName('region:' + doLoc)
         const doStub = env.REMOTE_CHECKER_DO.get(doId, {
           locationHint: doLoc as DurableObjectLocationHint,
         })
         resp = await doStub.getLocationAndStatus(monitor)
-        try {
-          // Kill the DO instance after use, to avoid extra resource usage
-          await doStub.kill()
-        } catch (err) {
-          // An error here is expected, ignore it
-        }
       } else if (monitor.checkProxy.startsWith('globalping://')) {
         resp = await getStatusWithGlobalPing(monitor)
       } else {

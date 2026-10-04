@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Exercise a fresh Pages artifact against bounded, disposable dashboard fixtures. */
+/** Exercise a fresh Worker artifact against bounded, disposable dashboard fixtures. */
 import assert from 'node:assert/strict'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -10,8 +10,8 @@ import { performance } from 'node:perf_hooks'
 import { createHash } from 'node:crypto'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const staticRoot = join(root, '.vercel/output/static')
-const artifact = join(staticRoot, '_worker.js/index.js')
+const staticRoot = join(root, 'out')
+const artifact = join(root, '.deployment/unified-worker/index.js')
 const origin = 'https://dashboard.test'
 const targetCount = 100
 const probeCount = 3
@@ -48,15 +48,15 @@ const sourcePaths = (
 )
   .flat()
   .filter((path) => /\.(?:tsx?|css|json)$/.test(path) && !path.includes('.test.'))
-  .concat(join(root, 'middleware.ts'), join(root, 'uptime.config.ts'))
+  .concat(join(root, 'compat/middleware.ts'), join(root, 'uptime.config.ts'))
 assert.ok(
   (await Promise.all(sourcePaths.map((path) => stat(path)))).every(
     (value) => value.mtimeMs <= artifactTime
   ),
-  'Build a fresh next-on-pages artifact before running the dashboard smoke test'
+  'Build a fresh unified Worker artifact before running the dashboard smoke test'
 )
 
-// Only this fixture entry wraps the real D1 driver. The Pages module is unchanged.
+// Only this fixture entry wraps the real D1 driver. The Worker module is unchanged.
 // SELECT.first is observed through the same SELECT.all to obtain D1 row metadata.
 const tracedEntry = `import pages from './index.js';
 function traceDatabase(database, trace) {
@@ -169,7 +169,7 @@ const mf = new Miniflare({
             headers: { 'Content-Type': contentType },
           })
         } catch {
-          // Match the Pages asset fallback; fixture worker modules are never served.
+          // Match the Worker asset fallback; fixture worker modules are never served.
         }
       }
       return new Response(null, { status: 404 })
@@ -497,7 +497,7 @@ try {
     JSON.stringify(
       {
         passed: true,
-        actualPagesArtifact: true,
+        actualWorkerArtifact: true,
         artifactSha256: createHash('sha256')
           .update(await readFile(artifact))
           .digest('hex'),

@@ -1,3 +1,9 @@
+import { pageAccess } from './access'
+import { RegionalExecutor, type RegionalRequest } from './regional'
+import dataHandler from './http/data'
+import badgeHandler from './http/badge'
+import incidentsHandler from './http/incidents'
+import { getPublicDashboard } from './public-dashboard'
 import { runNativeMonitors } from './native-monitor'
 import { cleanupMonitorSchedules } from './scheduling'
 import { DurableObject } from 'cloudflare:workers'
@@ -19,6 +25,7 @@ export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
   UPTIMEFLARE_D1: D1Database
   UPTIMEFLARE_PUBLIC_KV?: KVNamespace
+  ASSETS?: Fetcher
   PROBE_TOKENS?: string
   ADMIN_PASSWORD?: string
   ADMIN_SESSION_SECRET?: string
@@ -26,7 +33,27 @@ export interface Env {
 
 const Worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const access = pageAccess(request, fallbackConfig.passwordProtection)
+    if (access) return access
     const pathname = new URL(request.url).pathname
+    if (pathname === '/api/data') return dataHandler(request, env)
+    if (pathname === '/api/badge') return badgeHandler(request, env)
+    if (pathname === '/api/incidents') return incidentsHandler(request, env)
+    if (pathname === '/api/state') {
+      if (request.method !== 'GET')
+        return new Response(null, { status: 405, headers: { Allow: 'GET' } })
+      try {
+        return Response.json(await getPublicDashboard(env, fallbackConfig), {
+          headers: { 'Cache-Control': 'no-store' },
+        })
+      } catch {
+        return Response.json({ error: 'Public dashboard temporarily unavailable' }, { status: 503 })
+      }
+    }
+    if (!pathname.startsWith('/api/')) {
+      if (!env.ASSETS) return new Response('Not found', { status: 404 })
+      return env.ASSETS.fetch(request)
+    }
     if (new URL(request.url).pathname.startsWith('/api/admin/'))
       return handleAdminRequest(request, env, fallbackConfig)
     if (new URL(request.url).pathname.startsWith('/api/manage/'))
@@ -67,15 +94,31 @@ const Worker = {
         .catch(() => undefined)
         .then((value) => value || 'UNKNOWN'))
     await cleanupMonitorSchedules(env, workerConfig.monitors)
-    const active = workerConfig.monitors.filter(monitor => !monitor.paused)
-    const cloudflareCount = active.filter(monitor => monitor.probes?.includes('cloudflare')).length
-    const nativeCount = active.filter(monitor => !monitor.probes?.length).length
+    const active = workerConfig.monitors.filter((monitor) => !monitor.paused)
+    const cloudflareCount = active.filter(
+      (monitor) => monitor.probes?.includes('cloudflare')
+    ).length
+    const nativeCount = active.filter((monitor) => !monitor.probes?.length).length
     const budget = { remaining: MAX_SCHEDULED_TARGETS_PER_CRON }
     // Reserve a proportional share so a busy Cloudflare scope cannot starve legacy native targets.
-    const cloudflareLimit = nativeCount && cloudflareCount
-      ? Math.max(1, Math.floor(MAX_SCHEDULED_TARGETS_PER_CRON * cloudflareCount / (cloudflareCount + nativeCount)))
-      : MAX_SCHEDULED_TARGETS_PER_CRON
-    await runCloudflareProbe(env, workerConfig.monitors, time, getLocation, undefined, budget, cloudflareLimit)
+    const cloudflareLimit =
+      nativeCount && cloudflareCount
+        ? Math.max(
+            1,
+            Math.floor(
+              (MAX_SCHEDULED_TARGETS_PER_CRON * cloudflareCount) / (cloudflareCount + nativeCount)
+            )
+          )
+        : MAX_SCHEDULED_TARGETS_PER_CRON
+    await runCloudflareProbe(
+      env,
+      workerConfig.monitors,
+      time,
+      getLocation,
+      undefined,
+      budget,
+      cloudflareLimit
+    )
     await runNativeMonitors(env, workerConfig, time, getLocation, undefined, budget)
     await runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
       console.error('Notification evaluation failed')
@@ -89,6 +132,13 @@ const Worker = {
 export default Worker
 
 export class RemoteChecker extends DurableObject {
+  private executor = new RegionalExecutor()
+  async checkBatch(request: RegionalRequest) {
+    return this.executor.checkBatch(request)
+  }
+  async protocol() {
+    return { regional: 1 }
+  }
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
   }
@@ -105,11 +155,8 @@ export class RemoteChecker extends DurableObject {
     }
   }
 
+  // Old clients may call this during a rolling upgrade. Instances now hibernate naturally.
   async kill() {
-    // Throwing an error in `blockConcurrencyWhile` will terminate the Durable Object instance
-    // https://developers.cloudflare.com/durable-objects/api/state/#blockconcurrencywhile
-    this.ctx.blockConcurrencyWhile(async () => {
-      throw 'killed'
-    })
+    return
   }
 }

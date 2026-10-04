@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { workerConfig } from './uptime.config'
+import { workerConfig } from '../uptime.config'
 
 export async function middleware(request: NextRequest) {
   // These exact routes enforce independent bearer authentication in their handlers.

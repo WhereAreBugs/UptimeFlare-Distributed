@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Verify real Pages KV bindings without D1, using disposable public fixtures only. */
+/** Verify real Worker KV bindings without D1, using disposable public fixtures only. */
 import assert from 'node:assert/strict'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -11,8 +11,8 @@ import Module from 'node:module'
 import ts from 'typescript'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const staticRoot = join(root, '.vercel/output/static')
-const artifact = join(staticRoot, '_worker.js/index.js')
+const staticRoot = join(root, 'out')
+const artifact = join(root, '.deployment/unified-worker/index.js')
 const origin = 'https://public-cache.test'
 const previewOrigin = 'http://127.0.0.1:8796'
 const secrets = [
@@ -46,12 +46,12 @@ const sources = (
 )
   .flat()
   .filter((path) => /\.(?:tsx?|css|json)$/.test(path) && !path.includes('.test.'))
-  .concat(join(root, 'middleware.ts'), join(root, 'uptime.config.ts'))
+  .concat(join(root, 'compat/middleware.ts'), join(root, 'uptime.config.ts'))
 check(
   (await Promise.all(sources.map((path) => stat(path)))).every(
     (value) => value.mtimeMs <= artifactTime
   ),
-  'Build a fresh next-on-pages artifact before running the public cache smoke test'
+  'Build a fresh unified Worker artifact before running the public cache smoke test'
 )
 
 const { Miniflare } = await import(
@@ -151,7 +151,7 @@ async function assets(request) {
         : 'application/octet-stream'
       return new Response(await readFile(candidate), { headers: { 'Content-Type': type } })
     } catch {
-      /* Match Pages asset fallbacks. */
+      /* Match Worker asset fallbacks. */
     }
   }
   return new Response(null, { status: 404 })
@@ -230,7 +230,7 @@ async function publicChecks(mf, snapshot) {
   const props = pageProps(responses[0].body)
   const data = JSON.parse(responses[1].body)
   for (const value of [props, data]) {
-    check(value.source === 'kv', 'Actual Pages env must resolve the KV binding')
+    check(value.source === 'kv', 'Actual Worker env must resolve the KV binding')
     check(
       value.snapshotAt === snapshot.generatedAt,
       'Generated time must come from the seeded snapshot'
@@ -353,7 +353,7 @@ try {
     JSON.stringify(
       {
         passed: true,
-        actualPagesArtifact: true,
+        actualWorkerArtifact: true,
         artifactSha256: createHash('sha256')
           .update(await readFile(artifact))
           .digest('hex'),

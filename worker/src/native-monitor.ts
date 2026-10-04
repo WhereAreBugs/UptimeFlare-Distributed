@@ -1,3 +1,4 @@
+import { checkMonitors } from './regional'
 import type { WorkerConfig } from '../../types/config'
 import type { Env } from './index'
 import {
@@ -27,7 +28,9 @@ export async function runNativeMonitors(
   check: typeof doMonitor = doMonitor,
   budget?: ScheduledBudget
 ) {
-  const nativeMonitors = workerConfig.monitors.filter((monitor) => !monitor.paused && !monitor.probes?.length)
+  const nativeMonitors = workerConfig.monitors.filter(
+    (monitor) => !monitor.paused && !monitor.probes?.length
+  )
   const now = Math.floor(Date.now() / 1000)
   if (!(await hasDueMonitors(env, 'native', nativeMonitors, time, now))) return
   const writer = await claimNativeWriter(env, time, now)
@@ -57,21 +60,16 @@ export async function runNativeMonitors(
     }
     let checkQueue: Promise<CheckResult>[] = []
     let checkResult: Record<string, CheckResult> = {}
-    const limit = pLimit(5)
-    for (const monitor of claim.monitors) {
-      checkQueue.push(
-        limit(() =>
-          check(
-            { ...monitor, timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS },
-            workerLocation,
-            env
-          )
-        )
-      )
-    }
-    for (const result of await Promise.all(checkQueue)) {
+    for (const result of await checkMonitors(claim.monitors, workerLocation, env, check))
       checkResult[result.id] = result
-    }
+    const measured = claim.monitors.filter((monitor) => checkResult[monitor.id])
+    await releaseScheduledClaim(
+      env,
+      claim,
+      measured.map((m) => m.id)
+    )
+    claim = { ...claim, monitors: measured }
+    if (!measured.length) return
 
     // Update each monitor's state based on check results
     for (const monitor of claim.monitors) {
