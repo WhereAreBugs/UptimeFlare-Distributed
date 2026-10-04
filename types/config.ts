@@ -14,12 +14,14 @@ export type PageConfig = {
 }
 
 export type MaintenanceConfig = {
+  id?: string
   monitors?: string[]
   title?: string
   body: string
   start: number | string
   end?: number | string
   color?: string
+  repeat?: { frequency: 'daily' | 'weekly' | 'monthly'; timeZone: string }
 }
 
 export type PageConfigGroup = { [key: string]: string[] }
@@ -33,6 +35,7 @@ export type PageConfigLink = {
 export type MonitorTarget = {
   /** Internal reference to an administrator-defined webhook template. */
   notificationTemplateId?: string
+  notificationGracePeriodSeconds?: number
   /** Assigned probes, including reserved ID `cloudflare` for the scheduled Worker. */
   probes?: string[]
   id: string
@@ -53,9 +56,16 @@ export type MonitorTarget = {
   responseForbiddenKeyword?: string
   checkProxy?: string
   checkProxyFallback?: boolean
+  checkProxyHeaders?: { [key: string]: string }
+  /** Certificate validity threshold for SSL_CERT; omitted means 14 days. */
+  certificateExpiryDays?: number
+  /** Authenticated ICMP proxy endpoint for Workers or hosts without native ICMP. */
+  icmpProxyURL?: string
 }
 
 export type WorkerConfig<TEnv = Env> = {
+  page?: PageConfig
+  maintenances?: MaintenanceConfig[]
   notificationTemplates?: NotificationTemplate[]
   probes?: ProbeDefinition[]
   kvWriteCooldownMinutes?: number

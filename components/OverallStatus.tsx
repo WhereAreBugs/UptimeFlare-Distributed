@@ -1,4 +1,4 @@
-import { MaintenanceConfig, MonitorTarget } from '@/types/config'
+import { MaintenanceConfig, MonitorTarget, PageConfig } from '@/types/config'
 import { Center, Container, Title, Collapse, Group, Badge } from '@mantine/core'
 import {
   IconCircleCheck,
@@ -8,7 +8,7 @@ import {
 } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 import MaintenanceAlert from './MaintenanceAlert'
-import { pageConfig } from '@/uptime.config'
+import { pageConfig as fallbackPageConfig } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
 import { aggregateStatus, statusColors, summarizeMonitors } from '@/util/probe-status'
 
@@ -27,14 +27,16 @@ export default function OverallStatus({
   maintenances,
   monitors,
   aggregate,
+  page = fallbackPageConfig,
 }: {
   state: { overallUp: number; overallDown: number; lastUpdate: number }
   maintenances: MaintenanceConfig[]
   monitors: MonitorTarget[]
   aggregate?: ReturnType<typeof summarizeMonitors>
+  page?: PageConfig
 }) {
   const { t } = useTranslation('common')
-  let group = pageConfig.group
+  let group = page.group
   let groupedMonitor = (group && Object.keys(group).length > 0) || false
 
   let statusString = ''
@@ -158,6 +160,7 @@ export default function OverallStatus({
               <MaintenanceAlert
                 key={`upcoming-${idx}`}
                 maintenance={maintenance}
+                page={page}
                 style={{ maxWidth: groupedMonitor ? '897px' : '865px' }}
                 upcoming
               />
@@ -171,6 +174,7 @@ export default function OverallStatus({
         <MaintenanceAlert
           key={`active-${idx}`}
           maintenance={maintenance}
+          page={page}
           style={{ maxWidth: groupedMonitor ? '897px' : '865px' }}
         />
       ))}

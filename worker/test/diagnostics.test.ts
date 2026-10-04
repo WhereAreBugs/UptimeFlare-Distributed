@@ -64,11 +64,11 @@ describe('native check diagnostics', () => {
   test('a proxy transport error describes the proxy boundary', () => {
     expect(classifyNativeFailure('connect ECONNREFUSED secret-proxy', 'proxy')).toMatchObject({
       stage: 'proxy',
-      code: 'unknown',
+      code: 'refused',
     })
     expect(classifyNativeFailure('Globalping error: DNS timeout')).toMatchObject({
       stage: 'proxy',
-      code: 'unknown',
+      code: 'timeout',
     })
   })
 

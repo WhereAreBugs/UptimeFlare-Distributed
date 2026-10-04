@@ -14,6 +14,7 @@ import 'chartjs-adapter-moment'
 import { MonitorState, MonitorTarget } from '@/types/config'
 import { codeToCountry } from '@/util/iata'
 import { useTranslation } from 'react-i18next'
+import { nativeLatencyPoints } from '@/util/probe-status'
 
 ChartJS.register(
   CategoryScale,
@@ -34,11 +35,7 @@ export default function DetailChart({
   state: MonitorState
 }) {
   const { t } = useTranslation('common')
-  const latencyData = state.latency[monitor.id].map((point) => ({
-    x: point.time * 1000,
-    y: point.ping,
-    loc: point.loc,
-  }))
+  const latencyData = nativeLatencyPoints(monitor, state)
 
   let data = {
     datasets: [
@@ -47,6 +44,7 @@ export default function DetailChart({
         borderColor: 'rgb(112, 119, 140)',
         borderWidth: 2,
         radius: 0,
+        spanGaps: false,
         cubicInterpolationMode: 'monotone' as const,
         tension: 0.4,
       },
@@ -67,7 +65,7 @@ export default function DetailChart({
       tooltip: {
         callbacks: {
           label: (item: any) => {
-            if (item.parsed.y) {
+            if (item.parsed.y !== null) {
               return `${item.parsed.y}ms (${codeToCountry(item.raw.loc)})`
             }
           },

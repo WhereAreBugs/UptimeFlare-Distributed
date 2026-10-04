@@ -74,10 +74,9 @@ beforeAll(async () => {
     UPTIMEFLARE_D1: (await mf.getD1Database('UPTIMEFLARE_D1')) as unknown as D1Database,
     PROBE_TOKENS: JSON.stringify({ a: TOKEN_A, b: TOKEN_B }),
   }
-  const schema = readFileSync(
-    new URL('../../migrations/0001_external_probes.sql', import.meta.url),
-    'utf8'
-  )
+  const schema =
+    readFileSync(new URL('../../migrations/0001_external_probes.sql', import.meta.url), 'utf8') +
+    readFileSync(new URL('../../migrations/0006_probe_history.sql', import.meta.url), 'utf8')
   for (const statement of schema.split(';').filter((s) => s.trim()))
     await env.UPTIMEFLARE_D1.prepare(statement).run()
 }, 30000)
@@ -241,7 +240,7 @@ describe('durable, idempotent and ordered ingestion', () => {
     const stats = (await getProbeSummaries(env, monitors, [], NOW)).private.probes[0]
     expect(stats.checks).toBe(200)
     expect(stats.failures).toBe(67)
-    expect(stats.avgLatencyMs).toBe(12.5)
+    expect(stats.avgLatencyMs).toBeNull() // Both five-minute buckets contain failures.
     expect(stats.recentFailures).toHaveLength(67)
   })
   it('rolls back all writes when a later D1 statement fails', async () => {

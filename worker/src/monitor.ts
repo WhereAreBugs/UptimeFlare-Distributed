@@ -40,6 +40,14 @@ async function readBoundedBody(response: Response, deadline: number): Promise<st
   }
 }
 
+async function readProxyJSON(response: Response, deadline: number) {
+  try { return JSON.parse(await readBoundedBody(response, deadline)) }
+  catch (error) {
+    const timeout = Date.now() >= deadline || classifyNativeFailure(error).code === 'timeout'
+    throw new Error(timeout ? '[proxy/timeout] Check proxy response timed out' : '[proxy/invalid_response] Invalid check proxy response')
+  }
+}
+
 function isIpAddress(hostname: string): boolean {
   // `URL.hostname` strips brackets for IPv6, so a `:` reliably indicates an IPv6 literal here.
   if (hostname.includes(':')) return true
@@ -123,8 +131,8 @@ export async function getStatusWithGlobalPing(
     const token = gpUrl.hostname
     let globalPingRequest = {}
 
-    if (monitor.method === 'TCP_PING') {
-      const targetUrl = parseNativeTcpTarget(monitor.target)
+    if (monitor.method === 'TCP_PING' || monitor.method === 'ICMP_PING') {
+      const targetUrl = monitor.method === 'TCP_PING' ? parseNativeTcpTarget(monitor.target) : { hostname: monitor.target, port: undefined }
       const ipVersionOption = getDomainOnlyIpVersionOption(targetUrl.hostname, gpUrl)
       globalPingRequest = {
         type: 'ping',
@@ -138,9 +146,9 @@ export async function getStatusWithGlobalPing(
               ]
             : undefined,
         measurementOptions: {
-          port: targetUrl.port,
+          ...(targetUrl.port !== undefined && { port: targetUrl.port }),
           packets: 1,
-          protocol: 'tcp', // TODO: icmp?
+          protocol: monitor.method === 'ICMP_PING' ? 'icmp' : 'tcp',
           ...ipVersionOption,
         },
       }
@@ -192,7 +200,7 @@ export async function getStatusWithGlobalPing(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + token,
+        ...(token && { Authorization: 'Bearer ' + token }),
       },
       body: JSON.stringify(globalPingRequest),
     })
@@ -245,14 +253,18 @@ export async function getStatusWithGlobalPing(
     const country = measurementResult.results[0].probe.country
     const city = measurementResult.results[0].probe.city
 
-    if (monitor.method === 'TCP_PING') {
-      const time = Math.round(measurementResult.results[0].result.stats.avg)
+    if (monitor.method === 'TCP_PING' || monitor.method === 'ICMP_PING') {
+      const stats = measurementResult.results[0].result.stats
+      const time = Number.isFinite(stats?.avg) && stats.avg >= 0 ? Math.round(stats.avg) : 0
+      const reachable = Number.isFinite(stats?.rcv) && stats.rcv > 0 && Number.isFinite(stats.avg) && stats.avg >= 0
+      const stage = monitor.method === 'ICMP_PING' ? 'icmp' : 'tcp'
       return {
         location: country + '/' + city,
         status: {
           ping: time,
-          up: true,
-          err: '',
+          up: reachable,
+          err: reachable ? '' : `[${stage}/timeout] No echo reply was received`,
+          ...(monitor.method === 'ICMP_PING' && { icmp_latency_ms: time }),
         },
       }
     } else {
@@ -306,6 +318,25 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
   }
 
   const startTime = Date.now()
+
+  if (monitor.method === 'SSL_CERT') return { ping: 0, up: false, err: '[configuration/invalid_request] Certificate expiry checks require a Go probe or HTTP check proxy' }
+  if (monitor.method === 'ICMP_PING') {
+    if (!monitor.icmpProxyURL) return { ping: 0, up: false, err: '[configuration/invalid_request] ICMP checks require a configured proxy in Workers' }
+    try {
+      const response = await fetchTimeout(monitor.icmpProxyURL, monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS, {
+        method: 'POST', headers: { ...(monitor.headers as Record<string,string>), ...monitor.checkProxyHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: monitor.target, timeout_ms: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS }), redirect: 'manual',
+      })
+      if (!response.ok) { await response.body?.cancel(); throw new Error('[proxy/status] Proxy returned an unsuccessful HTTP status') }
+      const result = await readProxyJSON(response, startTime + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS))
+      if (typeof result.up !== 'boolean' || !Number.isFinite(result.latency_ms) || result.latency_ms < 0 || result.latency_ms > 300000 || (result.icmp_latency_ms !== undefined && (!Number.isFinite(result.icmp_latency_ms) || result.icmp_latency_ms < 0 || result.icmp_latency_ms > 300000))) throw new Error('[proxy/invalid_response] Invalid ICMP proxy response')
+      const err = result.up ? '' : formatNativeDiagnostic(classifyNativeFailure(`[${result.stage ?? 'icmp'}/${result.code ?? 'unknown'}] ICMP check failed`))
+      return { ping: Date.now()-startTime, up: result.up, err, icmp_latency_ms: result.icmp_latency_ms ?? result.latency_ms }
+    } catch (error) {
+      const diagnostic = classifyNativeFailure(error, 'proxy')
+      return { ping: Date.now()-startTime, up: false, err: formatNativeDiagnostic(diagnostic), stage: diagnostic.stage, code: diagnostic.code }
+    }
+  }
 
   if (monitor.method === 'TCP_PING') {
     // TCP port endpoint monitor
@@ -411,9 +442,10 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
     try {
       console.log(`[${monitor.id}] Calling check proxy`)
       let resp
+      const deadline = Date.now() + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)
       if (monitor.checkProxy.startsWith('worker://')) {
         const doLoc = monitor.checkProxy.replace('worker://', '')
-        const doId = env.REMOTE_CHECKER_DO.idFromName(monitor.id)
+        const doId = env.REMOTE_CHECKER_DO.idFromName(JSON.stringify([monitor.id, doLoc]))
         const doStub = env.REMOTE_CHECKER_DO.get(doId, {
           locationHint: doLoc as DurableObjectLocationHint,
         })
@@ -432,21 +464,25 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
           monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(monitor),
+            headers: { ...monitor.checkProxyHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...monitor, checkProxy: undefined, checkProxyFallback: undefined, checkProxyHeaders: undefined, icmpProxyURL: undefined }),
+            redirect: 'manual',
           }
         )
-        if (!response.ok) throw new Error('Check proxy returned an unsuccessful HTTP response')
-        resp = await response.json<{ location: string; status: NativeCheckStatus }>()
+        if (!response.ok) { await response.body?.cancel(); throw new Error('[proxy/status] Check proxy returned an unsuccessful HTTP response') }
+        resp = await readProxyJSON(response, deadline)
       }
       if (
         !resp ||
         typeof resp.location !== 'string' ||
         typeof resp.status?.up !== 'boolean' ||
         typeof resp.status.err !== 'string' ||
-        !Number.isFinite(resp.status.ping)
+        !Number.isFinite(resp.status.ping) || resp.status.ping < 0 || resp.status.ping > 300000 ||
+        (resp.status.certificate_expires_at !== undefined && (!Number.isSafeInteger(resp.status.certificate_expires_at) || resp.status.certificate_expires_at < 0 || resp.status.certificate_expires_at > 253402300799)) ||
+        (resp.status.certificate_days_remaining !== undefined && !Number.isFinite(resp.status.certificate_days_remaining)) ||
+        (resp.status.icmp_latency_ms !== undefined && (!Number.isFinite(resp.status.icmp_latency_ms) || resp.status.icmp_latency_ms < 0 || resp.status.icmp_latency_ms > 300000))
       )
-        throw new Error('Invalid check proxy response')
+        throw new Error('[proxy/invalid_response] Invalid check proxy response')
       checkLocation = resp.location
       status = resp.status
     } catch (err) {
@@ -470,10 +506,11 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
 
   if (!status.up) {
     const diagnostic = classifyNativeFailure(
-      status.err,
+      typeof status.stage === 'string' && typeof status.code === 'string' ? `[${status.stage}/${status.code}] ${status.err}` : status.err,
       monitor.method === 'TCP_PING' ? 'tcp' : 'http'
     )
     status = {
+      ...status,
       ping: status.ping,
       up: false,
       err: formatNativeDiagnostic(diagnostic),
@@ -481,7 +518,7 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
       code: diagnostic.code,
     }
   } else {
-    status = { ping: status.ping, up: true, err: '' }
+    status = { ...status, ping: status.ping, up: true, err: '' }
   }
 
   console.log(

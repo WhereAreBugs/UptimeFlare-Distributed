@@ -1,5 +1,5 @@
 import { Text, Tooltip } from '@mantine/core'
-import { MonitorState, MonitorTarget } from '@/types/config'
+import { MaintenanceConfig, MonitorState, MonitorTarget } from '@/types/config'
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -9,7 +9,7 @@ import {
 import DetailChart from './DetailChart'
 import DetailBar from './DetailBar'
 import { getColor } from '@/util/color'
-import { maintenances } from '@/uptime.config'
+import { maintenances as fallbackMaintenances } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import ProbeMonitorDetail from './ProbeMonitorDetail'
@@ -20,16 +20,25 @@ export default function MonitorDetail({
   state,
   probeSummaries = {},
   now = Math.round(Date.now() / 1000),
+  maintenances = fallbackMaintenances,
 }: {
   monitor: MonitorTarget
   state: MonitorState
   probeSummaries?: Record<string, ProbeMonitorSummary>
   now?: number
+  maintenances?: MaintenanceConfig[]
 }) {
   const { t } = useTranslation('common')
 
   if (monitor.probes?.length)
-    return <ProbeMonitorDetail monitor={monitor} summary={probeSummaries[monitor.id]} now={now} />
+    return (
+      <ProbeMonitorDetail
+        monitor={monitor}
+        summary={probeSummaries[monitor.id]}
+        now={now}
+        maintenances={maintenances}
+      />
+    )
 
   const incidents = state.incident[monitor.id]
   if (!state.latency[monitor.id]?.length || !incidents?.length)
@@ -69,7 +78,9 @@ export default function MonitorDetail({
   const currentDate = new Date(now * 1000)
   const hasMaintenance = maintenances
     .filter((m) => currentDate >= new Date(m.start) && (!m.end || currentDate <= new Date(m.end)))
-    .find((maintenance) => maintenance.monitors?.includes(monitor.id))
+    .find(
+      (maintenance) => !maintenance.monitors?.length || maintenance.monitors.includes(monitor.id)
+    )
   if (hasMaintenance)
     statusIcon = (
       <IconAlertTriangle

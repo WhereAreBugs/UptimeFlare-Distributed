@@ -22,8 +22,6 @@ export async function runCloudflareProbe(
     .map((monitor) => ({
       ...monitor,
       timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
-      checkProxy: undefined,
-      checkProxyFallback: undefined,
     }))
   const claim = await claimScheduledMonitors(
     env,
@@ -51,21 +49,18 @@ export async function runCloudflareProbe(
     const results: ProbeResult[] = await Promise.all(
       claim.monitors.map((monitor) =>
         limit(async () => {
-          // A built-in Cloudflare assignment always checks directly, even if a legacy
-          // source config still contains proxy options.
-          const { status } = await check(
-            { ...monitor, checkProxy: undefined, checkProxyFallback: undefined },
-            checkLocation,
-            env
-          )
+          const { status } = await check(monitor, checkLocation, env)
           const failure = status.up ? undefined : parseNativeDiagnostic(status.err)
           return {
             monitor_id: monitor.id,
             time,
             up: status.up,
             latency_ms: status.ping,
+            ...(status.certificate_expires_at !== undefined && { certificate_expires_at: status.certificate_expires_at }),
+            ...(status.certificate_days_remaining !== undefined && { certificate_days_remaining: status.certificate_days_remaining }),
+            ...(status.icmp_latency_ms !== undefined && { icmp_latency_ms: status.icmp_latency_ms }),
             ...(failure && {
-              stage: failure.stage === 'proxy' ? 'unknown' : failure.stage,
+              stage: failure.stage,
               code: failure.code,
               message: failure.message,
             }),

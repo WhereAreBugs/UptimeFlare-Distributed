@@ -1,5 +1,6 @@
-import { MonitorTarget, WebhookConfig } from '../../types/config'
-import { maintenances, workerConfig } from '../../uptime.config'
+import { MonitorTarget, WebhookConfig, WorkerConfig } from '../../types/config'
+import { workerConfig } from '../../uptime.config'
+import { isInMaintenance } from '../../util/maintenance'
 
 async function getWorkerLocation() {
   const res = await fetchTimeout('https://cloudflare.com/cdn-cgi/trace', 3000)
@@ -15,18 +16,18 @@ const fetchTimeout = (
   { signal, ...options }: RequestInit<RequestInitCfProperties> | undefined = {}
 ): Promise<Response> => {
   const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (signal?.aborted) abort()
+  signal?.addEventListener('abort', abort, { once: true })
   const promise = fetch(url, { signal: controller.signal, ...options })
-  if (signal) signal.addEventListener('abort', () => controller.abort())
   const timeout = setTimeout(() => controller.abort(), ms)
-  return promise.finally(() => clearTimeout(timeout))
+  return promise.finally(() => { clearTimeout(timeout); signal?.removeEventListener('abort', abort) })
 }
 
 function withTimeout<T>(millis: number, promise: Promise<T>): Promise<T> {
-  const timeout = new Promise<T>((resolve, reject) =>
-    setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis)
-  )
-
-  return Promise.race([promise, timeout])
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis) })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 function formatStatusChangeNotification(
@@ -87,9 +88,7 @@ async function webhookNotify(webhook: WebhookConfig, message: string) {
     return
   }
 
-  console.log(
-    'Sending webhook notification: ' + JSON.stringify(message) + ' to webhook ' + webhook.url
-  )
+  console.log('Sending webhook notification')
   try {
     let url = webhook.url
     let method = webhook.method
@@ -127,22 +126,17 @@ async function webhookNotify(webhook: WebhookConfig, message: string) {
         throw 'Unrecognized payload type: ' + webhook.payloadType
     }
 
-    console.log(
-      `Webhook finalized parameters: ${method} ${url}, headers ${JSON.stringify(
-        Object.fromEntries(headers.entries())
-      )}, body ${JSON.stringify(body)}`
-    )
-    const resp = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body })
+    const resp = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body, redirect: 'manual' })
 
     if (!resp.ok) {
       console.log(
-        'Error calling webhook server, code: ' + resp.status + ', response: ' + (await resp.text())
+        'Webhook returned an unsuccessful HTTP response, code: ' + resp.status
       )
     } else {
       console.log('Webhook notification sent successfully, code: ' + resp.status)
     }
   } catch (e) {
-    console.log('Error calling webhook server: ' + e)
+    console.error('Webhook request failed')
   }
 }
 
@@ -152,40 +146,32 @@ const formatAndNotify = async (
   isUp: boolean,
   timeIncidentStart: number,
   timeNow: number,
-  reason: string
+  reason: string,
+  config: WorkerConfig = workerConfig
 ) => {
   // Skip notification if monitor is in the skip list
-  const skipList = workerConfig.notification?.skipNotificationIds
+  const skipList = config.notification?.skipNotificationIds
   if (skipList && skipList.includes(monitor.id)) {
     console.log(`Skipping notification for ${monitor.name} (${monitor.id} in skipNotificationIds)`)
     return
   }
 
   // Skip notification if monitor is in maintenance
-  const maintenanceList = maintenances
-    .filter(
-      (m) =>
-        new Date(timeNow * 1000) >= new Date(m.start) &&
-        (!m.end || new Date(timeNow * 1000) <= new Date(m.end))
-    )
-    .map((e) => e.monitors || [])
-    .flat()
-
-  if (maintenanceList.includes(monitor.id)) {
+  if (isInMaintenance(config, monitor.id, timeNow)) {
     console.log(`Skipping notification for ${monitor.name} (in maintenance)`)
     return
   }
 
-  if (workerConfig.notification?.webhook) {
+  if (config.notification?.webhook) {
     const notification = formatStatusChangeNotification(
       monitor,
       isUp,
       timeIncidentStart,
       timeNow,
       reason,
-      workerConfig.notification?.timeZone ?? 'Etc/GMT'
+      config.notification?.timeZone ?? 'Etc/GMT'
     )
-    await webhookNotify(workerConfig.notification.webhook, notification)
+    await webhookNotify(config.notification.webhook, notification)
   } else {
     console.log(`Webhook not set, skipping notification for ${monitor.name}`)
   }

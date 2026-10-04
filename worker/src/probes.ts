@@ -10,11 +10,12 @@ import type {
   ProbeBatch,
   ProbeDefinition,
   ProbeMonitorSummary,
+  ProbeIncidentPage,
   ProbeResult,
   ProbeSummary,
 } from '../../types/probes'
 import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './probe-labels'
-import { aggregateStatus } from '../../util/probe-status'
+import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-status'
 
 export interface ProbeEnv {
   UPTIMEFLARE_D1: D1Database
@@ -24,7 +25,17 @@ export interface ProbeEnv {
 export const MAX_PROBE_BODY = 512 * 1024
 export const MAX_PROBE_RESULTS = 200
 const RETENTION_SECONDS = 90 * 24 * 60 * 60
-const STAGES = new Set(['dns', 'tcp', 'tls', 'http', 'body', 'configuration', 'unknown'])
+const STAGES = new Set([
+  'dns',
+  'tcp',
+  'tls',
+  'http',
+  'body',
+  'icmp',
+  'proxy',
+  'configuration',
+  'unknown',
+])
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/
 
 class ProbeRequestError extends Error {
@@ -116,7 +127,85 @@ function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTa
       throw new ProbeRequestError(503, 'Invalid monitor configuration')
     }
   }
-  return monitors.filter((monitor) => monitor.probes?.includes(probeId))
+  const assigned = monitors.filter((monitor) => monitor.probes?.includes(probeId))
+  for (const monitor of assigned) {
+    try {
+      if (
+        ![
+          'GET',
+          'HEAD',
+          'POST',
+          'PUT',
+          'PATCH',
+          'DELETE',
+          'OPTIONS',
+          'TCP_PING',
+          'SSL_CERT',
+          'ICMP_PING',
+        ].includes(monitor.method) ||
+        typeof monitor.target !== 'string'
+      )
+        throw new Error('Invalid target')
+      if (monitor.method === 'TCP_PING') {
+        if (!/^(?:\[[0-9a-fA-F:]+\]|[^\s:/?#]+):\d{1,5}$/.test(monitor.target))
+          throw new Error('Invalid TCP target')
+        const port = Number(monitor.target.slice(monitor.target.lastIndexOf(':') + 1))
+        if (port < 1 || port > 65535) throw new Error('Invalid TCP port')
+      } else if (monitor.method === 'ICMP_PING') {
+        if (!/^(?:[a-zA-Z0-9_.-]+|[a-fA-F0-9:]+)$/.test(monitor.target))
+          throw new Error('Invalid ICMP target')
+        if (monitor.target.includes(':')) new URL(`http://[${monitor.target}]`)
+      } else {
+        const target = new URL(monitor.target)
+        if (
+          !['http:', 'https:'].includes(target.protocol) ||
+          target.username ||
+          target.password ||
+          (monitor.method === 'SSL_CERT' && target.protocol !== 'https:')
+        )
+          throw new Error('Invalid HTTP target')
+      }
+      if (
+        monitor.certificateExpiryDays !== undefined &&
+        (!Number.isInteger(monitor.certificateExpiryDays) ||
+          monitor.certificateExpiryDays < 0 ||
+          monitor.certificateExpiryDays > 365)
+      )
+        throw new Error('Invalid certificate threshold')
+      if (
+        monitor.checkProxyFallback !== undefined &&
+        typeof monitor.checkProxyFallback !== 'boolean'
+      )
+        throw new Error('Invalid proxy fallback')
+      for (const endpoint of [monitor.icmpProxyURL, monitor.checkProxy]) {
+        if (endpoint === undefined) continue
+        const url = new URL(endpoint)
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+          throw new Error('Invalid HTTP proxy')
+      }
+      if (monitor.checkProxyHeaders !== undefined) {
+        if (
+          !monitor.checkProxyHeaders ||
+          typeof monitor.checkProxyHeaders !== 'object' ||
+          Array.isArray(monitor.checkProxyHeaders) ||
+          Object.keys(monitor.checkProxyHeaders).length > 32
+        )
+          throw new Error('Invalid proxy headers')
+        for (const [key, value] of Object.entries(monitor.checkProxyHeaders)) {
+          if (
+            !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) ||
+            typeof value !== 'string' ||
+            value.length > 4096 ||
+            /[\r\n\u0000]/.test(value)
+          )
+            throw new Error('Invalid proxy headers')
+        }
+      }
+    } catch {
+      throw new ProbeRequestError(503, 'Invalid assigned monitor configuration')
+    }
+  }
+  return assigned
 }
 
 /** Limits the stream before buffering; used on both compressed and expanded bodies. */
@@ -207,7 +296,19 @@ function validateBatch(value: unknown, authorized: MonitorTarget[], now: number)
         (typeof result.message !== 'string' ||
           result.message.length > 512 ||
           /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(result.message))) ||
-      (!result.up && (!result.stage || !result.code))
+      (!result.up && (!result.stage || !result.code)) ||
+      (result.certificate_expires_at !== undefined &&
+        (!Number.isSafeInteger(result.certificate_expires_at) ||
+          result.certificate_expires_at < 0 ||
+          result.certificate_expires_at > 253402300799)) ||
+      (result.certificate_days_remaining !== undefined &&
+        (typeof result.certificate_days_remaining !== 'number' ||
+          !Number.isFinite(result.certificate_days_remaining))) ||
+      (result.icmp_latency_ms !== undefined &&
+        (typeof result.icmp_latency_ms !== 'number' ||
+          !Number.isFinite(result.icmp_latency_ms) ||
+          result.icmp_latency_ms < 0 ||
+          result.icmp_latency_ms > 300000))
     ) {
       throw new ProbeRequestError(400, 'Invalid sample timestamp, latency, or diagnostic')
     }
@@ -236,6 +337,15 @@ export async function persistBatch(
       stage: r.stage || '',
       code: r.code || '',
       message: r.message || '',
+      details: JSON.stringify({
+        ...(r.certificate_expires_at !== undefined && {
+          certificateExpiresAt: r.certificate_expires_at,
+        }),
+        ...(r.certificate_days_remaining !== undefined && {
+          certificateDaysRemaining: r.certificate_days_remaining,
+        }),
+        ...(r.icmp_latency_ms !== undefined && { icmpLatencyMs: r.icmp_latency_ms }),
+      }),
     }))
   )
   const affected = `WITH affected AS (
@@ -243,6 +353,18 @@ export async function persistBatch(
       CAST(json_extract(value, '$.time') / 300 AS INTEGER) * 300 AS time FROM json_each(?)
   )`
   const statements = [
+    // Insert sparse metadata before the new raw sample. A replay can neither replace nor
+    // add metadata to an existing identity, including one originally sent without metadata.
+    env.UPTIMEFLARE_D1.prepare(
+      `INSERT OR IGNORE INTO probe_sample_details (probe_id,monitor_id,time,details)
+      SELECT ?,json_extract(entry.value,'$.monitor_id'),json_extract(entry.value,'$.time'),json_extract(entry.value,'$.details')
+      FROM json_each(?) entry WHERE json_extract(entry.value,'$.details')<>'{}'
+      AND NOT EXISTS (SELECT 1 FROM probe_samples s WHERE s.probe_id=? AND s.monitor_id=json_extract(entry.value,'$.monitor_id') AND s.time=json_extract(entry.value,'$.time'))${
+        gate
+          ? ` AND EXISTS (SELECT 1 FROM monitor_schedule schedule WHERE schedule.scope=? AND schedule.monitor_id=json_extract(entry.value,'$.monitor_id') AND schedule.lease_key=?)`
+          : ''
+      }`
+    ).bind(probeId, payload, probeId, ...(gate ? [gate.scope, gate.key] : [])),
     env.UPTIMEFLARE_D1.prepare(
       `INSERT OR IGNORE INTO probe_samples
       (probe_id, monitor_id, time, up, latency_ms, stage, code, message)
@@ -265,6 +387,24 @@ export async function persistBatch(
       ON CONFLICT(probe_id,monitor_id) DO UPDATE SET time=excluded.time, up=excluded.up,
       latency_ms=excluded.latency_ms, stage=excluded.stage, code=excluded.code, message=excluded.message
       WHERE excluded.time > probe_latest.time`
+    ).bind(payload, probeId),
+    env.UPTIMEFLARE_D1.prepare(
+      `${affected}, fresh AS (
+      SELECT s.probe_id,s.monitor_id,a.time,COUNT(*) checks,SUM(1-s.up) failures,SUM(s.latency_ms) latency_sum
+      FROM affected a JOIN probe_samples s ON s.probe_id=? AND s.monitor_id=a.monitor_id
+        AND s.time>=a.time AND s.time<a.time+300 GROUP BY s.probe_id,s.monitor_id,a.time
+    ), delta AS (
+      SELECT n.probe_id,n.monitor_id,CAST(n.time/86400 AS INTEGER)*86400 time,
+        SUM(n.checks-COALESCE(b.checks,0)) checks,SUM(n.failures-COALESCE(b.failures,0)) failures,
+        SUM((CASE WHEN n.failures=0 THEN n.checks ELSE 0 END)-(CASE WHEN b.failures=0 THEN b.checks ELSE 0 END)) latency_checks,
+        SUM((CASE WHEN n.failures=0 THEN n.latency_sum ELSE 0 END)-(CASE WHEN b.failures=0 THEN b.latency_sum ELSE 0 END)) latency_sum
+      FROM fresh n LEFT JOIN probe_buckets b ON b.probe_id=n.probe_id AND b.monitor_id=n.monitor_id AND b.time=n.time
+      GROUP BY n.probe_id,n.monitor_id,CAST(n.time/86400 AS INTEGER)*86400
+    ) INSERT INTO probe_days (probe_id,monitor_id,time,checks,failures,latency_checks,latency_sum)
+      SELECT probe_id,monitor_id,time,checks,failures,latency_checks,latency_sum FROM delta WHERE 1
+      ON CONFLICT(probe_id,monitor_id,time) DO UPDATE SET checks=probe_days.checks+excluded.checks,
+        failures=probe_days.failures+excluded.failures,latency_checks=probe_days.latency_checks+excluded.latency_checks,
+        latency_sum=probe_days.latency_sum+excluded.latency_sum`
     ).bind(payload, probeId),
     // Apply differences against the old rollups before replacing them. Replays contribute zero.
     env.UPTIMEFLARE_D1.prepare(
@@ -351,6 +491,15 @@ export async function handleProbeRequest(
           target: monitor.target,
           intervalSeconds: getMonitorIntervalSeconds(monitor),
           timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+          ...(monitor.method === 'SSL_CERT' && {
+            certificateExpiryDays: monitor.certificateExpiryDays ?? 14,
+          }),
+          ...(monitor.icmpProxyURL && { icmpProxyURL: monitor.icmpProxyURL }),
+          ...(monitor.checkProxy && { checkProxy: monitor.checkProxy }),
+          ...(monitor.checkProxyFallback !== undefined && {
+            checkProxyFallback: monitor.checkProxyFallback,
+          }),
+          ...(monitor.checkProxyHeaders && { checkProxyHeaders: monitor.checkProxyHeaders }),
           ...(monitor.headers && {
             headers: Object.fromEntries(
               Object.entries(monitor.headers).map(([key, value]) => [key, String(value)])
@@ -388,6 +537,19 @@ export async function cleanupProbeResults(
   await env.UPTIMEFLARE_D1.batch([
     env.UPTIMEFLARE_D1.prepare(
       `WITH expired AS (${expiredBuckets}), delta AS (
+      SELECT b.probe_id,b.monitor_id,CAST(b.time/86400 AS INTEGER)*86400 time,SUM(b.checks) checks,SUM(b.failures) failures,
+        SUM(CASE WHEN b.failures=0 THEN b.checks ELSE 0 END) latency_checks,
+        SUM(CASE WHEN b.failures=0 THEN b.latency_sum ELSE 0 END) latency_sum
+      FROM probe_buckets b JOIN expired e ON b.probe_id=e.probe_id AND b.monitor_id=e.monitor_id AND b.time=e.time
+      GROUP BY b.probe_id,b.monitor_id,CAST(b.time/86400 AS INTEGER)*86400
+    ) INSERT INTO probe_days (probe_id,monitor_id,time,checks,failures,latency_checks,latency_sum)
+      SELECT probe_id,monitor_id,time,-checks,-failures,-latency_checks,-latency_sum FROM delta WHERE 1
+      ON CONFLICT(probe_id,monitor_id,time) DO UPDATE SET checks=probe_days.checks+excluded.checks,
+        failures=probe_days.failures+excluded.failures,latency_checks=probe_days.latency_checks+excluded.latency_checks,
+        latency_sum=probe_days.latency_sum+excluded.latency_sum`
+    ).bind(cutoff),
+    env.UPTIMEFLARE_D1.prepare(
+      `WITH expired AS (${expiredBuckets}), delta AS (
       SELECT b.probe_id,b.monitor_id,SUM(b.checks) checks,SUM(b.failures) failures,SUM(b.latency_sum) latency_sum
       FROM probe_buckets b JOIN expired e ON b.probe_id=e.probe_id AND b.monitor_id=e.monitor_id AND b.time=e.time
       GROUP BY b.probe_id,b.monitor_id
@@ -396,6 +558,13 @@ export async function cleanupProbeResults(
       ON CONFLICT(probe_id,monitor_id) DO UPDATE SET checks=probe_totals.checks+excluded.checks,
         failures=probe_totals.failures+excluded.failures,latency_sum=probe_totals.latency_sum+excluded.latency_sum`
     ).bind(cutoff),
+    env.UPTIMEFLARE_D1.prepare(
+      `DELETE FROM probe_sample_details WHERE (probe_id,monitor_id,time) IN
+      (SELECT d.probe_id,d.monitor_id,d.time FROM probe_sample_details d WHERE d.time<?
+        AND NOT EXISTS (SELECT 1 FROM probe_latest l WHERE l.probe_id=d.probe_id AND l.monitor_id=d.monitor_id AND l.time=d.time)
+        ORDER BY d.time,d.probe_id,d.monitor_id LIMIT 5000)`
+    ).bind(cutoff),
+    env.UPTIMEFLARE_D1.prepare('DELETE FROM probe_days WHERE checks<=0'),
     env.UPTIMEFLARE_D1.prepare(
       `WITH expired AS (${expiredStages}), delta AS (
       SELECT b.probe_id,b.monitor_id,b.stage,SUM(b.failures) failures
@@ -427,6 +596,7 @@ type Latest = {
   stage: string
   code: string
   message: string
+  details?: string | null
 }
 type Bucket = {
   probe_id: string
@@ -436,6 +606,7 @@ type Bucket = {
   failures: number
   latency_sum: number
 }
+type Day = Bucket & { latency_checks: number }
 
 export async function getProbeSummaries(
   env: ProbeEnv,
@@ -460,9 +631,12 @@ export async function getProbeSummaries(
   const allowedPairs = `SELECT json_extract(value,'$.probe_id'),json_extract(value,'$.monitor_id') FROM json_each(?)`
   const scope = `(probe_id,monitor_id) IN (${allowedPairs})`
   const latestScope = `(l.probe_id,l.monitor_id) IN (${allowedPairs})`
-  const [latestData, totalsData, historyData, stagesData, failuresData] =
+  const [latestData, totalsData, historyData, stagesData, failuresData, dailyData] =
     await env.UPTIMEFLARE_D1.batch([
-      env.UPTIMEFLARE_D1.prepare(`SELECT * FROM probe_latest WHERE ${scope}`).bind(assignments),
+      env.UPTIMEFLARE_D1.prepare(
+        `SELECT l.*,d.details FROM probe_latest l LEFT JOIN probe_sample_details d
+        ON d.probe_id=l.probe_id AND d.monitor_id=l.monitor_id AND d.time=l.time WHERE ${latestScope}`
+      ).bind(assignments),
       env.UPTIMEFLARE_D1.prepare(`SELECT * FROM probe_totals WHERE ${scope}`).bind(assignments),
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_buckets WHERE ${scope} AND time>=? AND time<=? ORDER BY time`
@@ -478,8 +652,15 @@ export async function getProbeSummaries(
         AND f.up=0 AND f.time>=? ORDER BY f.time DESC LIMIT 100)
       WHERE ${latestScope} AND s.up=0 ORDER BY s.time DESC`
       ).bind(now - RETENTION_SECONDS, assignments),
+      env.UPTIMEFLARE_D1.prepare(
+        `SELECT * FROM probe_days WHERE ${scope} AND time>=? AND time<=? AND checks>0 ORDER BY time`
+      ).bind(assignments, Math.floor((now - RETENTION_SECONDS) / 86400) * 86400, now),
     ])
-  if ([latestData, totalsData, historyData, stagesData, failuresData].some((r) => !r.success)) {
+  if (
+    [latestData, totalsData, historyData, stagesData, failuresData, dailyData].some(
+      (r) => !r.success
+    )
+  ) {
     throw new Error('Unable to load probe summaries')
   }
   const key = (row: { monitor_id: string; probe_id: string }) =>
@@ -493,9 +674,23 @@ export async function getProbeSummaries(
       time: row.time,
       checks: row.checks,
       failures: row.failures,
-      avgLatencyMs: row.checks ? row.latency_sum / row.checks : null,
+      // A bucket containing any failed check has no successful response-time point.
+      avgLatencyMs: row.checks && row.failures === 0 ? row.latency_sum / row.checks : null,
     })
     histories.set(key(row), values)
+  }
+  const dailyHistories = new Map<string, ProbeSummary['dailyHistory']>()
+  for (const row of dailyData.results as Day[]) {
+    const values = dailyHistories.get(key(row)) || []
+    values.push({
+      time: row.time,
+      checks: row.checks,
+      failures: row.failures,
+      uptimePercent: row.checks ? (100 * (row.checks - row.failures)) / row.checks : null,
+      avgLatencyMs: row.latency_checks ? row.latency_sum / row.latency_checks : null,
+      latencyChecks: row.latency_checks,
+    })
+    dailyHistories.set(key(row), values)
   }
   const stages = new Map<string, Record<string, number>>()
   for (const row of stagesData.results as (Latest & { failures: number })[]) {
@@ -517,6 +712,13 @@ export async function getProbeSummaries(
       const latest = latestMap.get(lookup)
       const totals = totalsMap.get(lookup)
       const definition = labels.get(id)
+      const dailyHistory = dailyHistories.get(lookup) || []
+      const latencyChecks = dailyHistory.reduce((sum, day) => sum + day.latencyChecks, 0)
+      const latencySum = dailyHistory.reduce(
+        (sum, day) => sum + (day.avgLatencyMs ?? 0) * day.latencyChecks,
+        0
+      )
+      const details = latest?.details ? (JSON.parse(latest.details) as Record<string, number>) : {}
       const stale = !latest || latest.time < now - getMonitorStaleAfterSeconds(monitor)
       const status = stale ? 'unknown' : latest!.up ? 'up' : 'down'
       const probe: ProbeSummary = {
@@ -529,7 +731,14 @@ export async function getProbeSummaries(
         status,
         stale,
         latest: latest?.time ?? null,
-        latencyMs: latest?.latency_ms ?? null,
+        latencyMs: latest?.up ? latest.latency_ms : null,
+        ...(details.certificateExpiresAt !== undefined && {
+          certificateExpiresAt: details.certificateExpiresAt,
+        }),
+        ...(details.certificateDaysRemaining !== undefined && {
+          certificateDaysRemaining: details.certificateDaysRemaining,
+        }),
+        ...(details.icmpLatencyMs !== undefined && { icmpLatencyMs: details.icmpLatencyMs }),
         stage: stale ? 'probe' : latest?.stage || undefined,
         code: stale ? (latest ? 'stale' : 'no_data') : latest?.code || undefined,
         message: stale
@@ -539,9 +748,16 @@ export async function getProbeSummaries(
           : latest?.message || undefined,
         checks: totals?.checks ?? 0,
         failures: totals?.failures ?? 0,
-        avgLatencyMs: totals?.checks ? totals.latency_sum / totals.checks : null,
+        avgLatencyMs: latencyChecks ? latencySum / latencyChecks : null,
         failureStages: stages.get(lookup) || {},
         history: histories.get(lookup) || [],
+        dailyHistory,
+        uptimePercent: totals?.checks
+          ? (100 * (totals.checks - totals.failures)) / totals.checks
+          : null,
+        retainedFrom: dailyHistory.length
+          ? Math.max(now - RETENTION_SECONDS, dailyHistory[0].time)
+          : null,
         recentFailures: failures.get(lookup) || [],
       }
       return probe
@@ -550,6 +766,11 @@ export async function getProbeSummaries(
     const down = probes.filter((p) => p.status === 'down').length
     const unknown = probes.length - up - down
     const latestTimes = probes.flatMap((p) => (p.latest === null ? [] : [p.latest]))
+    const checks = probes.reduce((sum, probe) => sum + probe.checks, 0)
+    const failureCount = probes.reduce((sum, probe) => sum + probe.failures, 0)
+    const starts = probes.flatMap((probe) =>
+      probe.retainedFrom === null ? [] : [probe.retainedFrom]
+    )
     summaries[monitor.id] = {
       monitorId: monitor.id,
       status: aggregateStatus(up, down, unknown),
@@ -558,8 +779,121 @@ export async function getProbeSummaries(
       unknown,
       total: probes.length,
       latest: latestTimes.length ? Math.max(...latestTimes) : null,
+      dailyHistory: summarizeProbeDailyHistory(probes, now),
+      uptimePercent: checks ? (100 * (checks - failureCount)) / checks : null,
+      retainedFrom: starts.length ? Math.min(...starts) : null,
       probes,
     }
   }
   return summaries
+}
+
+export type ProbeIncidentQuery = {
+  from?: number
+  to?: number
+  monitorId?: string
+  probeId?: string
+  cursor?: string
+  limit?: number
+}
+
+/** Index-assisted, stable pagination of failed checks throughout the retained ninety days.
+ * These are observations, not inferred downtime episodes: silence is never a target failure.
+ */
+export async function getProbeIncidents(
+  env: ProbeEnv,
+  monitors: MonitorTarget[],
+  definitions: ProbeDefinition[] = [],
+  query: ProbeIncidentQuery = {},
+  now = Math.floor(Date.now() / 1000)
+): Promise<ProbeIncidentPage> {
+  const from = Math.max(now - RETENTION_SECONDS, query.from ?? now - RETENTION_SECONDS)
+  const to = Math.min(now + 1, query.to ?? now + 1)
+  const limit = query.limit ?? 100
+  if (
+    !Number.isSafeInteger(from) ||
+    !Number.isSafeInteger(to) ||
+    from >= to ||
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 100
+  )
+    throw new Error('Invalid incident history range or page size')
+  if (query.monitorId && !monitors.some((monitor) => monitor.id === query.monitorId))
+    throw new Error('Unknown monitor')
+  const external = monitors.filter(
+    (monitor) => monitor.probes?.length && (!query.monitorId || monitor.id === query.monitorId)
+  )
+  const pairs = external.flatMap((monitor) =>
+    monitor
+      .probes!.filter((id) => !query.probeId || query.probeId === id)
+      .map((probe_id) => ({ probe_id, monitor_id: monitor.id }))
+  )
+  if (pairs.length > 64) throw new Error('Probe display configuration exceeds limits')
+  if (query.probeId && !pairs.length) throw new Error('Unknown probe assignment')
+  let cursor: [number, string, string] = [to, '\uffff', '\uffff']
+  if (query.cursor) {
+    try {
+      if (query.cursor.length > 1024) throw new Error('Invalid cursor')
+      const decoded = JSON.parse(atob(query.cursor))
+      if (
+        !Array.isArray(decoded) ||
+        decoded.length !== 3 ||
+        !Number.isSafeInteger(decoded[0]) ||
+        typeof decoded[1] !== 'string' ||
+        typeof decoded[2] !== 'string' ||
+        !ID.test(decoded[1]) ||
+        !ID.test(decoded[2]) ||
+        decoded[0] < from ||
+        decoded[0] >= to
+      )
+        throw new Error('Invalid cursor')
+      cursor = decoded as [number, string, string]
+    } catch {
+      throw new Error('Invalid incident cursor')
+    }
+  }
+  if (!pairs.length) return { failures: [], nextCursor: null, from, to }
+  const data = await env.UPTIMEFLARE_D1.prepare(
+    `WITH assigned AS (
+      SELECT json_extract(value,'$.probe_id') probe_id,json_extract(value,'$.monitor_id') monitor_id FROM json_each(?)
+    ) SELECT s.* FROM assigned a JOIN probe_samples s ON s.probe_id=a.probe_id AND s.monitor_id=a.monitor_id
+      AND s.time IN (SELECT f.time FROM probe_samples f
+        WHERE f.probe_id=a.probe_id AND f.monitor_id=a.monitor_id AND f.up=0 AND f.time>=? AND f.time<?
+          AND (f.time,f.monitor_id,f.probe_id)<(?,?,?) ORDER BY f.time DESC LIMIT ?)
+      WHERE s.up=0 ORDER BY s.time DESC,s.monitor_id DESC,s.probe_id DESC LIMIT ?`
+  )
+    .bind(JSON.stringify(pairs), from, to, ...cursor, limit + 1, limit + 1)
+    .all<Latest>()
+  if (!data.success) throw new Error('Unable to load incident history')
+  const labels = new Map(definitions.map((probe) => [probe.id, probe]))
+  const targets = new Map(monitors.map((monitor) => [monitor.id, monitor]))
+  const rows = data.results.slice(0, limit)
+  const last = rows[rows.length - 1]
+  return {
+    failures: rows.map((row) => {
+      const monitor = targets.get(row.monitor_id)!
+      const definition = labels.get(row.probe_id)
+      const index = monitor.probes!.indexOf(row.probe_id)
+      return {
+        time: row.time,
+        stage: row.stage,
+        code: row.code,
+        message: row.message,
+        monitorId: monitor.id,
+        monitorName: monitor.name,
+        probeId: row.probe_id,
+        probeName:
+          definition?.name ||
+          definition?.defaultName ||
+          (row.probe_id === CLOUDFLARE_PROBE_ID ? 'Cloudflare' : `探针 ${index + 1}`),
+      }
+    }),
+    nextCursor:
+      data.results.length > limit && last
+        ? btoa(JSON.stringify([last.time, last.monitor_id, last.probe_id]))
+        : null,
+    from,
+    to,
+  }
 }

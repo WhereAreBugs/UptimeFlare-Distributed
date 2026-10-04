@@ -1,8 +1,9 @@
 import type { WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { getProbeDefinitions } from './probe-labels'
+import { pageConfig, maintenances } from '../../uptime.config'
 
-export type EditableSettings = Pick<WorkerConfig, 'monitors' | 'probes' | 'notificationTemplates'>
+export type EditableSettings = Pick<WorkerConfig, 'monitors' | 'probes' | 'notificationTemplates' | 'page' | 'maintenances' | 'notification'>
 export type StoredSettings = EditableSettings & { revision: number }
 
 /** Read once per request; D1 is the authoritative source after the first admin save. */
@@ -22,6 +23,9 @@ export async function getSettings(env: ProbeEnv, fallback: WorkerConfig): Promis
     revision: settings.revision,
     monitors: settings.monitors,
     notificationTemplates: settings.notificationTemplates ?? [],
+    page: settings.page ?? fallback.page ?? pageConfig,
+    maintenances: settings.maintenances ?? fallback.maintenances ?? maintenances,
+    notification: settings.notification ?? fallback.notification ?? {},
     probes: await getProbeDefinitions(env, settings.probes ?? []),
   }
 }
@@ -35,5 +39,6 @@ export async function getRuntimeConfig(
   const { probeStaleAfterSeconds: _legacy, ...base } = fallback as WorkerConfig & {
     probeStaleAfterSeconds?: unknown
   }
-  return { ...base, ...(await getSettings(env, fallback)) }
+  const settings = await getSettings(env, fallback)
+  return { ...base, ...settings, notification: { ...base.notification, ...settings.notification } }
 }

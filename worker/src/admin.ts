@@ -9,6 +9,7 @@ import type { ProbeDefinition } from '../../types/probes'
 import type { ProbeEnv } from './probes'
 import { getSettings, type EditableSettings } from './settings'
 import { CLOUDFLARE_PROBE_ID } from './probe-labels'
+import { validatePage, validateMaintenances, validateNotificationDefaults, PresentationInputError } from './presentation'
 
 export interface AdminEnv extends ProbeEnv {
   ADMIN_PASSWORD?: string
@@ -239,12 +240,18 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
       if (!text(monitor.name, 200, true) || !text(monitor.target, 2048, true))
         throw new AdminInputError('目标名称和地址不能为空或过长')
       if (
-        !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TCP_PING'].includes(
+        !['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TCP_PING', 'SSL_CERT', 'ICMP_PING'].includes(
           monitor.method
         )
       )
         throw new AdminInputError('检测方法无效')
-      if (monitor.method === 'TCP_PING') {
+      if (monitor.method === 'ICMP_PING') {
+        if (!/^(?:[a-zA-Z0-9_.-]+|[a-fA-F0-9:]+)$/.test(monitor.target) || monitor.target.includes('://') || /\s/.test(monitor.target))
+          throw new AdminInputError('ICMP 目标应为域名或 IP，不包含协议和端口')
+        if (monitor.target.includes(':')) {
+          try { new URL(`http://[${monitor.target}]/`) } catch { throw new AdminInputError('ICMP IPv6 地址无效') }
+        }
+      } else if (monitor.method === 'TCP_PING') {
         if (
           !/^(?:\[[0-9a-fA-F:]+\]|[^\s:/?#]+):\d{1,5}$/.test(monitor.target) ||
           Number(monitor.target.slice(monitor.target.lastIndexOf(':') + 1)) < 1 ||
@@ -258,7 +265,7 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
         } catch {
           throw new AdminInputError('HTTP 地址无效')
         }
-        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || (monitor.method === 'SSL_CERT' && url.protocol !== 'https:'))
           throw new AdminInputError('HTTP 地址只支持 http/https，鉴权请使用请求头')
       }
       if (
@@ -354,6 +361,50 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
         if (typeof monitor.hideLatencyChart !== 'boolean') throw new AdminInputError('图表开关无效')
         result.hideLatencyChart = monitor.hideLatencyChart
       }
+      if (monitor.certificateExpiryDays !== undefined) {
+        if (!Number.isInteger(monitor.certificateExpiryDays) || monitor.certificateExpiryDays < 0 || monitor.certificateExpiryDays > 365)
+          throw new AdminInputError('证书到期阈值应为 0–365 天')
+        result.certificateExpiryDays = monitor.certificateExpiryDays
+      }
+      if (monitor.notificationGracePeriodSeconds !== undefined) {
+        if (!Number.isInteger(monitor.notificationGracePeriodSeconds) || monitor.notificationGracePeriodSeconds < 0 || monitor.notificationGracePeriodSeconds > 86400)
+          throw new AdminInputError('目标通知宽限期应为 0–86400 秒')
+        result.notificationGracePeriodSeconds = monitor.notificationGracePeriodSeconds
+      }
+      for (const field of ['icmpProxyURL', 'checkProxy'] as const) {
+        if (monitor[field] !== undefined && monitor[field] !== '') {
+          let url: URL
+          try { url = new URL(monitor[field]) } catch { throw new AdminInputError('探测代理地址无效') }
+          if (url.username || url.password || !['http:', 'https:', ...(field === 'checkProxy' ? ['worker:', 'globalping:'] : [])].includes(url.protocol))
+            throw new AdminInputError('探测代理地址协议或鉴权方式无效')
+          if (url.protocol === 'worker:' && (!['wnam','enam','sam','weur','eeur','apac','apac-ne','apac-se','oc','afr','me'].includes(url.hostname) || url.search || url.pathname))
+            throw new AdminInputError('Cloudflare 地区代码无效')
+          if (['worker:', 'globalping:'].includes(url.protocol) && assigned.some(id => id !== CLOUDFLARE_PROBE_ID))
+            throw new AdminInputError('worker/globalping 地区代理仅适用于 Cloudflare 探针；Go 探针可使用 HTTP 代理')
+          if (monitor.method === 'SSL_CERT' && ['worker:', 'globalping:'].includes(url.protocol))
+            throw new AdminInputError('Cloudflare 证书到期检查需要 HTTP 探测代理或改为独立 Go 探针')
+          if (url.protocol === 'globalping:' && !['TCP_PING','ICMP_PING'].includes(monitor.method) && (!['GET','HEAD','OPTIONS'].includes(monitor.method) || monitor.body !== undefined))
+            throw new AdminInputError('Globalping HTTP 仅支持 GET/HEAD/OPTIONS，且不支持请求体')
+          result[field] = monitor[field]
+        }
+      }
+      if (monitor.checkProxyHeaders !== undefined) {
+        if (!monitor.checkProxyHeaders || typeof monitor.checkProxyHeaders !== 'object' || Array.isArray(monitor.checkProxyHeaders) || Object.keys(monitor.checkProxyHeaders).length > 32)
+          throw new AdminInputError('代理请求头无效')
+        result.checkProxyHeaders = {}
+        for (const [key, item] of Object.entries(monitor.checkProxyHeaders)) {
+          if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) || !text(item,4096)) throw new AdminInputError('代理请求头无效')
+          result.checkProxyHeaders[key] = item
+        }
+      }
+      if (monitor.checkProxyFallback !== undefined) {
+        if (typeof monitor.checkProxyFallback !== 'boolean') throw new AdminInputError('代理回退开关无效')
+        result.checkProxyFallback = monitor.checkProxyFallback
+      }
+      if (assigned.includes(CLOUDFLARE_PROBE_ID) && monitor.method === 'SSL_CERT' && !result.checkProxy)
+        throw new AdminInputError('Cloudflare 证书到期检查需要配置 HTTP 探测代理；独立 Go 探针可直接检查')
+      if (assigned.includes(CLOUDFLARE_PROBE_ID) && monitor.method === 'ICMP_PING' && !result.icmpProxyURL && (!result.checkProxy || result.checkProxy.startsWith('worker://')))
+        throw new AdminInputError('Cloudflare ICMP 检查需要配置 ICMP 或 Globalping 探测代理')
       return result
     }
   )
@@ -362,6 +413,9 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
     monitors,
     probes,
     notificationTemplates,
+    ...(value.page !== undefined && { page: validatePage(value.page, new Set(monitors.map(m => m.id))) }),
+    ...(value.maintenances !== undefined && { maintenances: validateMaintenances(value.maintenances, new Set(monitors.map(m => m.id))) }),
+    ...(value.notification !== undefined && { notification: validateNotificationDefaults(value.notification, new Set(monitors.map(m => m.id))) }),
   }
 }
 
@@ -436,7 +490,7 @@ export async function handleAdminRequest(
     return json(await getSettings(env, fallback))
   } catch (error) {
     // Never echo D1 errors, SQL, configured targets, passwords or request contents.
-    if (error instanceof AdminInputError) return json({ error: error.message }, 400)
+    if (error instanceof AdminInputError || error instanceof PresentationInputError) return json({ error: error.message }, 400)
     return json({ error: '配置服务暂时不可用' }, 503)
   }
 }

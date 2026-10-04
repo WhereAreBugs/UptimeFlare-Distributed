@@ -1,18 +1,20 @@
 import { Alert, List, Text, useMantineTheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { IconAlertTriangle } from '@tabler/icons-react'
-import { MaintenanceConfig, MonitorTarget } from '@/types/config'
-import { pageConfig } from '@/uptime.config'
+import type { MaintenanceConfig, MonitorTarget, PageConfig } from '@/types/config'
+import { pageConfig as fallbackPageConfig } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
 
 export default function MaintenanceAlert({
   maintenance,
   style,
   upcoming = false,
+  page = fallbackPageConfig,
 }: {
   maintenance: Omit<MaintenanceConfig, 'monitors'> & { monitors?: (MonitorTarget | undefined)[] }
   style?: React.CSSProperties
   upcoming?: boolean
+  page?: PageConfig
 }) {
   const { t } = useTranslation('common')
   const theme = useMantineTheme()
@@ -31,9 +33,7 @@ export default function MaintenanceAlert({
           {(upcoming ? t('Upcoming') : '') + (maintenance.title || t('Scheduled Maintenance'))}
         </span>
       }
-      color={
-        upcoming ? pageConfig.maintenances?.upcomingColor ?? 'gray' : maintenance.color || 'yellow'
-      }
+      color={upcoming ? page.maintenances?.upcomingColor ?? 'gray' : maintenance.color || 'yellow'}
       withCloseButton={false}
       style={{ margin: '16px auto 0 auto', ...style }}
     >

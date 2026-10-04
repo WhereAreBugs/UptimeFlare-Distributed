@@ -65,6 +65,8 @@ beforeEach(async () => {
     'probe_samples',
     'probe_latest',
     'probe_buckets',
+    'probe_days',
+    'probe_sample_details',
     'probe_bucket_stages',
     'probe_totals',
     'probe_stage_totals',

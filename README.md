@@ -22,6 +22,7 @@ New users can deploy directly, while existing users can have a simple auto migra
   - Per-target check intervals from 60 seconds to 24 hours; default 5 minutes
   - Geo-specific checks from over [310 cities](https://www.cloudflare.com/network/) worldwide
   - Support for HTTP/HTTPS/TCP port monitoring
+  - SSL certificate expiry and ICMP checks through Go probes or authenticated check proxies
   - Up to 90-day uptime history and uptime percentage tracking
   - Customizable request methods, headers, and body for HTTP(s)
   - Custom status code & keyword checks for HTTP(s)
@@ -47,7 +48,7 @@ Some screenshots:
 
 ## ⚡Quickstart / 📄Documentation
 
-For this distributed edition, see [deployment and external probes](docs/external-probes.md). The original [Wiki](https://github.com/lyc8503/UptimeFlare/wiki) describes the upstream version.
+For this distributed edition, see [deployment and external probes](docs/external-probes.md) and the [31-item feature matrix, development commands and Webhook examples](docs/features.md). The original [Wiki](https://github.com/lyc8503/UptimeFlare/wiki) describes the upstream version.
 
 ## 🚀Upgrade existing deployments
 
@@ -55,9 +56,11 @@ Push reviewed changes to `main` to deploy this edition. Bring upstream changes i
 
 ## ⚙️Docs for developer
 
-To contribute new features or customize your deployment furthermore, see [here](https://github.com/lyc8503/UptimeFlare/wiki/How-to-develop).
+See the [development and local deployment guide](docs/features.md#开发与部署). The original [development Wiki](https://github.com/lyc8503/UptimeFlare/wiki/How-to-develop) remains useful for upstream architecture.
 
 ## New features (TODOs)
+
+The checklist retains upstream history, including retired items. The [feature matrix](docs/features.md) maps every item to this edition's implementation and documents proxy, provider and runtime limits.
 
 - [x] Specify region for monitors
 - [x] TCP `opened` promise
@@ -67,7 +70,7 @@ To contribute new features or customize your deployment furthermore, see [here](
 - [x] ~~Email notification via Cloudflare Email Workers~~
 - [x] Improve docs by providing simple examples
 - [x] Notification grace period
-- [ ] SSL certificate checks
+- [x] SSL certificate checks
 - [x] ~~Self-host Dockerfile~~
 - [x] Incident history
 - [x] Improve `checkLocationWorkerRoute` and fix possible `proxy failed`
@@ -84,9 +87,13 @@ To contribute new features or customize your deployment furthermore, see [here](
 - [x] Upcoming maintenances
 - [x] Universal Webhook upgrade
 - [x] i18n...? (maybe)
-- [ ] ICMP via proxy?
+- [x] ICMP via proxy?
 - [x] Add default UA
 - [x] Customizable footer
 - [x] New header logo
 - [x] Improve CPU time usage
 - [x] Local deployment (docs WIP)
+
+## Deployment documentation
+
+See [Docker and local Wrangler deployment](docs/local-deployment.md) for shared persistent D1, runtime secrets and local HTTPS. See [optional Terraform 5 deployment](docs/terraform.md) for Worker/Pages bindings, Durable Object migration and SQL initialization.

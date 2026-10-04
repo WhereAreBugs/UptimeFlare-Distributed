@@ -1,8 +1,8 @@
 import Head from 'next/head'
 
 import { Inter } from 'next/font/google'
-import { MonitorTarget } from '@/types/config'
-import { maintenances, pageConfig } from '@/uptime.config'
+import { MonitorTarget, PageConfig, MaintenanceConfig } from '@/types/config'
+import { maintenances as initialMaintenances, pageConfig as initialPage } from '@/uptime.config'
 import OverallStatus from '@/components/OverallStatus'
 import Header from '@/components/Header'
 import MonitorList from '@/components/MonitorList'
@@ -17,6 +17,7 @@ import { summarizeMonitors } from '@/util/probe-status'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { getMonitorIntervalSeconds } from '@/util/monitor-settings'
+import { expandMaintenances, getPresentationSettings } from '@/util/maintenance'
 
 export const runtime = 'experimental-edge'
 const inter = Inter({ subsets: ['latin'] })
@@ -25,10 +26,14 @@ export default function Home({
   compactedStateStr,
   monitors,
   probeSummaries = {},
+  page = initialPage,
+  maintenances: plans = initialMaintenances,
 }: {
   compactedStateStr: string | null
   monitors: MonitorTarget[]
   probeSummaries?: Record<string, ProbeMonitorSummary>
+  page?: PageConfig
+  maintenances?: MaintenanceConfig[]
 }) {
   const { t } = useTranslation('common')
   const router = useRouter()
@@ -38,6 +43,8 @@ export default function Home({
   )
   const [now, setNow] = useState(() => Math.round(Date.now() / 1000))
   const [monitorId, setMonitorId] = useState('')
+  const windowMinute = Math.floor(now / 60)
+  const maintenances = useMemo(() => expandMaintenances(plans, windowMinute * 60 - 7 * 86400, windowMinute * 60 + 30 * 86400), [plans, windowMinute])
   useEffect(() => {
     const updateHash = () => setMonitorId(window.location.hash.substring(1))
     updateHash()
@@ -83,7 +90,7 @@ export default function Home({
     }
     return (
       <div style={{ maxWidth: '810px' }}>
-        <MonitorDetail monitor={monitor} state={state} probeSummaries={probeSummaries} now={now} />
+        <MonitorDetail monitor={monitor} state={state} probeSummaries={probeSummaries} now={now} maintenances={maintenances} />
       </div>
     )
   }
@@ -91,12 +98,12 @@ export default function Home({
   return (
     <>
       <Head>
-        <title>{pageConfig.title}</title>
-        <link rel="icon" href={pageConfig.favicon ?? '/favicon.png'} />
+        <title>{page.title}</title>
+        <link rel="icon" href={page.favicon ?? '/favicon.png'} />
       </Head>
 
       <main className={inter.className}>
-        <Header />
+        <Header page={page} />
 
         <div>
           <OverallStatus
@@ -104,16 +111,19 @@ export default function Home({
             monitors={monitors}
             maintenances={maintenances}
             aggregate={aggregate}
+            page={page}
           />
           <MonitorList
             monitors={monitors}
             state={state}
             probeSummaries={probeSummaries}
             now={now}
+            page={page}
+            maintenances={maintenances}
           />
         </div>
 
-        <Footer />
+        <Footer page={page} />
       </main>
     </>
   )
@@ -152,6 +162,7 @@ export async function getServerSideProps() {
       compactedStateStr,
       monitors,
       probeSummaries,
+      ...getPresentationSettings(workerConfig),
     },
   }
 }

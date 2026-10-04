@@ -29,6 +29,8 @@ const {
   getMonitorStatus,
   summarizeMonitors,
   summarizeProbeHistory,
+  summarizeProbeDailyHistory,
+  nativeLatencyPoints,
 } = loaded.exports
 
 const emptyState = { lastUpdate: 0, overallUp: 0, overallDown: 0, incident: {}, latency: {} }
@@ -184,10 +186,70 @@ test('history aggregates counts and weighted latency into aligned five-minute in
     total: 3,
     checks: 35,
     failures: 1,
-    avgLatencyMs: 900 / 35,
+    avgLatencyMs: null,
   })
   assert.equal(buckets.at(-2).avgLatencyMs, null)
   assert.equal(buckets.at(-2).reported, 1)
   assert.equal(buckets.at(-2).status, 'up')
   assert.equal(summarizeProbeHistory([], time + 300).at(-1).time, time + 300)
+})
+
+test('only entirely successful buckets have latency points; absent five-minute buckets stay null', () => {
+  const time = 1_800_000
+  const history = (checks, failures, avgLatencyMs) => ({
+    history: [{ time, checks, failures, avgLatencyMs }],
+  })
+  const success = summarizeProbeHistory([history(2, 0, 10), history(1, 0, 40)], time)
+  assert.equal(success.at(-1).avgLatencyMs, 20)
+  assert.equal(success.at(-2).avgLatencyMs, null)
+  assert.equal(summarizeProbeHistory([history(2, 1, 100000)], time).at(-1).avgLatencyMs, null)
+  assert.equal(summarizeProbeHistory([history(2, 2, 100000)], time).at(-1).avgLatencyMs, null)
+})
+
+test('ninety UTC days exclude missing checks from uptime and weight received samples', () => {
+  const now = 1_800_123
+  const time = Math.floor(now / 86400) * 86400
+  const days = summarizeProbeDailyHistory(
+    [
+      { dailyHistory: [{ time, checks: 2, failures: 0, avgLatencyMs: 10, latencyChecks: 2 }] },
+      { dailyHistory: [{ time, checks: 2, failures: 1, avgLatencyMs: null, latencyChecks: 0 }] },
+      { dailyHistory: [] },
+    ],
+    now
+  )
+  assert.equal(days.length, 90)
+  assert.equal(days.at(-1).uptimePercent, 75)
+  assert.equal(days.at(-1).avgLatencyMs, 10)
+  assert.equal(days.at(-2).uptimePercent, null)
+  assert.equal(days.at(-2).avgLatencyMs, null)
+})
+
+test('native line points preserve true zero latency and break at failure episodes and missing cadence', () => {
+  const state = {
+    ...emptyState,
+    latency: {
+      native: [
+        { time: 1000, ping: 0, loc: 'SIN' },
+        { time: 1300, ping: 0, loc: 'SIN' },
+        { time: 1600, ping: 20, loc: 'SIN' },
+        { time: 2200, ping: 30, loc: 'SIN' },
+      ],
+    },
+    incident: {
+      native: [
+        { start: [1000], end: 1000, error: ['dummy'] },
+        { start: [1300], end: 1600, error: ['[tcp/refused] Refused'] },
+      ],
+    },
+  }
+  assert.deepEqual(
+    nativeLatencyPoints(native, state).map((point) => [point.x, point.y]),
+    [
+      [1000000, 0],
+      [1300000, null],
+      [1600000, 20],
+      [1900000, null],
+      [2200000, 30],
+    ]
+  )
 })

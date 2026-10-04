@@ -1,11 +1,17 @@
 import { Container, Group, Image } from '@mantine/core'
 import classes from '@/styles/Header.module.css'
-import { pageConfig } from '@/uptime.config'
-import { PageConfigLink } from '@/types/config'
+import { pageConfig as fallbackPageConfig } from '@/uptime.config'
+import type { PageConfig, PageConfigLink } from '@/types/config'
 import { useTranslation } from 'react-i18next'
 import { useRouter } from 'next/router'
 
-export default function Header({ style }: { style?: React.CSSProperties }) {
+export default function Header({
+  style,
+  page = fallbackPageConfig,
+}: {
+  style?: React.CSSProperties
+  page?: PageConfig
+}) {
   const { t } = useTranslation('common')
   const { pathname } = useRouter()
   const linkToElement = (link: PageConfigLink, i: number) => {
@@ -14,6 +20,7 @@ export default function Header({ style }: { style?: React.CSSProperties }) {
         key={i}
         href={link.link}
         target={link.link.startsWith('/') ? undefined : '_blank'}
+        rel={link.link.startsWith('/') ? undefined : 'noreferrer'}
         className={classes.link}
         data-active={link.highlight}
       >
@@ -22,7 +29,7 @@ export default function Header({ style }: { style?: React.CSSProperties }) {
     )
   }
 
-  const links = [{ label: t('Incidents'), link: '/incidents' }, ...(pageConfig.links || [])]
+  const links = [{ label: t('Incidents'), link: '/incidents' }, ...(page.links || [])]
 
   return (
     <header className={classes.header} style={style}>
@@ -33,9 +40,10 @@ export default function Header({ style }: { style?: React.CSSProperties }) {
               pathname === '/' ? 'https://github.com/WhereAreBugs/UptimeFlare-Distributed' : '/'
             }
             target={pathname === '/' ? '_blank' : undefined}
+            rel={pathname === '/' ? 'noreferrer' : undefined}
           >
             <Image
-              src={pageConfig.logo ?? '/logo.svg'}
+              src={page.logo ?? '/logo.svg'}
               h={56}
               w={{ base: 140, sm: 190 }}
               fit="contain"

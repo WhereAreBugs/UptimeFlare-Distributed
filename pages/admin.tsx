@@ -5,6 +5,7 @@ import { IconArrowLeft } from '@tabler/icons-react'
 import {
   Alert,
   Button,
+  Checkbox,
   Container,
   Group,
   MultiSelect,
@@ -24,6 +25,10 @@ import type { StoredSettings } from '@/worker/src/settings'
 import NotificationTemplateEditor, {
   type WebhookDraft,
 } from '@/components/NotificationTemplateEditor'
+import PageSettingsEditor from '@/components/PageSettingsEditor'
+import MonitorGroupsEditor, { applyGroupDraftNames } from '@/components/MonitorGroupsEditor'
+import MaintenancePlansEditor from '@/components/MaintenancePlansEditor'
+import NotificationDefaultsEditor from '@/components/NotificationDefaultsEditor'
 import { createInternalId } from '@/util/internal-id'
 import {
   DEFAULT_MONITOR_INTERVAL_SECONDS,
@@ -79,11 +84,17 @@ export default function Admin() {
   const [advanced, setAdvanced] = useState<Record<string, string>>({})
   const [webhookDrafts, setWebhookDrafts] = useState<Record<string, WebhookDraft>>({})
   const [activeTab, setActiveTab] = useState<string | null>('monitors')
+  const [groupDraftNames, setGroupDraftNames] = useState<Record<string, string>>({})
+  const monitorOptions = optionLabels(
+    config?.monitors ?? [],
+    (monitor) => monitor.name || '未命名目标'
+  )
   const load = async () => {
     const result = await api('config')
     setConfig(result)
     setAdvanced({})
     setWebhookDrafts({})
+    setGroupDraftNames({})
   }
   useEffect(() => {
     load()
@@ -115,7 +126,11 @@ export default function Admin() {
   }
   const updateOptionalMonitor = (
     index: number,
-    field: 'intervalSeconds' | 'timeout',
+    field:
+      | 'intervalSeconds'
+      | 'timeout'
+      | 'notificationGracePeriodSeconds'
+      | 'certificateExpiryDays',
     value: string | number
   ) => {
     setConfig(
@@ -156,6 +171,11 @@ export default function Admin() {
         intervalSeconds: monitor.intervalSeconds,
         timeout: monitor.timeout,
         notificationTemplateId: monitor.notificationTemplateId,
+        notificationGracePeriodSeconds: monitor.notificationGracePeriodSeconds,
+        certificateExpiryDays: monitor.certificateExpiryDays,
+        icmpProxyURL: monitor.icmpProxyURL,
+        checkProxy: monitor.checkProxy,
+        checkProxyFallback: monitor.checkProxyFallback,
       }
     })
     const notificationTemplates = (config.notificationTemplates ?? []).map((template) => {
@@ -175,10 +195,15 @@ export default function Admin() {
         throw new Error(`${template.name} 的推送配置 JSON 无效`)
       }
     })
-    const saved = await api('config', 'PUT', { ...config, monitors, notificationTemplates })
+    const page = {
+      ...config.page,
+      group: applyGroupDraftNames(config.page?.group ?? {}, groupDraftNames),
+    }
+    const saved = await api('config', 'PUT', { ...config, monitors, notificationTemplates, page })
     setConfig(saved)
     setAdvanced({})
     setWebhookDrafts({})
+    setGroupDraftNames({})
     setMessage('已保存到 D1。探针通常在 5 分钟内获取新配置。')
   }
   return (
@@ -260,8 +285,42 @@ export default function Admin() {
               <Tabs.List grow aria-label="配置板块">
                 <Tabs.Tab value="monitors">监控目标</Tabs.Tab>
                 <Tabs.Tab value="probes">探针</Tabs.Tab>
-                <Tabs.Tab value="notifications">通知模板</Tabs.Tab>
+                <Tabs.Tab value="notifications">通知</Tabs.Tab>
+                <Tabs.Tab value="groups">分组</Tabs.Tab>
+                <Tabs.Tab value="maintenances">维护计划</Tabs.Tab>
+                <Tabs.Tab value="page">页面设置</Tabs.Tab>
               </Tabs.List>
+              <Tabs.Panel value="groups" pt="md">
+                <MonitorGroupsEditor
+                  value={config.page?.group ?? {}}
+                  monitorOptions={monitorOptions}
+                  draftNames={groupDraftNames}
+                  onChange={(group) => {
+                    setConfig({ ...config, page: { ...config.page, group } })
+                    setGroupDraftNames((old) =>
+                      Object.fromEntries(
+                        Object.entries(old).filter(([key]) => Object.hasOwn(group, key))
+                      )
+                    )
+                  }}
+                  onDraftChange={(key, name) =>
+                    setGroupDraftNames((old) => ({ ...old, [key]: name }))
+                  }
+                />
+              </Tabs.Panel>
+              <Tabs.Panel value="maintenances" pt="md">
+                <MaintenancePlansEditor
+                  value={config.maintenances ?? []}
+                  monitorOptions={monitorOptions}
+                  onChange={(maintenances) => setConfig({ ...config, maintenances })}
+                />
+              </Tabs.Panel>
+              <Tabs.Panel value="page" pt="md">
+                <PageSettingsEditor
+                  value={config.page ?? {}}
+                  onChange={(page) => setConfig({ ...config, page })}
+                />
+              </Tabs.Panel>
               <Tabs.Panel value="probes" pt="md">
                 <Paper withBorder p="md">
                   <Stack>
@@ -346,6 +405,11 @@ export default function Admin() {
               </Tabs.Panel>
               <Tabs.Panel value="notifications" pt="md">
                 <Stack>
+                  <NotificationDefaultsEditor
+                    value={config.notification ?? {}}
+                    monitorOptions={monitorOptions}
+                    onChange={(notification) => setConfig({ ...config, notification })}
+                  />
                   <Group justify="space-between">
                     <Title order={3}>通知模板</Title>
                     <Button
@@ -457,6 +521,11 @@ export default function Admin() {
                       intervalSeconds,
                       timeout,
                       notificationTemplateId,
+                      notificationGracePeriodSeconds,
+                      certificateExpiryDays,
+                      icmpProxyURL,
+                      checkProxy,
+                      checkProxyFallback,
                       ...extras
                     } = monitor
                     return (
@@ -468,10 +537,40 @@ export default function Admin() {
                               color="red"
                               variant="subtle"
                               onClick={() => {
-                                if (window.confirm('确认删除此目标？'))
+                                if (window.confirm('确认删除此目标及它的分组、维护关联？'))
                                   setConfig({
                                     ...config,
                                     monitors: config.monitors.filter((_, i) => i !== index),
+                                    page: {
+                                      ...config.page,
+                                      group: Object.fromEntries(
+                                        Object.entries(config.page?.group ?? {}).map(
+                                          ([group, targets]) => [
+                                            group,
+                                            targets.filter((targetId) => targetId !== id),
+                                          ]
+                                        )
+                                      ),
+                                    },
+                                    maintenances: config.maintenances
+                                      ?.filter(
+                                        (maintenance) =>
+                                          !maintenance.monitors?.includes(id) ||
+                                          maintenance.monitors.length > 1
+                                      )
+                                      .map((maintenance) => ({
+                                        ...maintenance,
+                                        monitors: maintenance.monitors?.filter(
+                                          (targetId) => targetId !== id
+                                        ),
+                                      })),
+                                    notification: {
+                                      ...config.notification,
+                                      skipNotificationIds:
+                                        config.notification?.skipNotificationIds?.filter(
+                                          (targetId) => targetId !== id
+                                        ),
+                                    },
                                   })
                               }}
                             >
@@ -499,6 +598,8 @@ export default function Admin() {
                                 'DELETE',
                                 'OPTIONS',
                                 'TCP_PING',
+                                'SSL_CERT',
+                                'ICMP_PING',
                               ]}
                               value={method}
                               onChange={(v) => updateMonitor(index, { method: v ?? 'GET' })}
@@ -529,18 +630,62 @@ export default function Admin() {
                             />
                           </Group>
                           <TextInput
-                            label={method === 'TCP_PING' ? '目标 host:port' : '目标 URL'}
+                            label={
+                              method === 'TCP_PING'
+                                ? '目标 host:port'
+                                : method === 'ICMP_PING'
+                                ? '目标主机 / IP'
+                                : method === 'SSL_CERT'
+                                ? '目标 HTTPS URL'
+                                : '目标 URL'
+                            }
                             value={target}
                             onChange={(e) =>
                               updateMonitor(index, { target: e.currentTarget.value })
                             }
                           />
+                          {method === 'SSL_CERT' && (
+                            <NumberInput
+                              label="证书到期阈值（天，可选）"
+                              placeholder="14"
+                              min={0}
+                              max={365}
+                              allowDecimal={false}
+                              allowNegative={false}
+                              value={certificateExpiryDays ?? ''}
+                              onChange={(value) =>
+                                updateOptionalMonitor(index, 'certificateExpiryDays', value)
+                              }
+                            />
+                          )}
+                          {method === 'ICMP_PING' && (
+                            <TextInput
+                              label="ICMP 代理地址（可选）"
+                              placeholder="https://"
+                              value={icmpProxyURL ?? ''}
+                              onChange={(event) =>
+                                updateMonitor(index, {
+                                  icmpProxyURL: event.currentTarget.value || undefined,
+                                })
+                              }
+                            />
+                          )}
                           <MultiSelect
                             label="执行探针"
                             data={optionLabels(config.probes, probeName)}
                             value={probes ?? []}
                             onChange={(v) => updateMonitor(index, { probes: v })}
                           />
+                          {probes?.includes('cloudflare') && method === 'SSL_CERT' && (
+                            <Text size="xs" c="dimmed">
+                              Cloudflare 需要 HTTPS 检测代理；也可选择 Go 探针直接检查证书。
+                            </Text>
+                          )}
+                          {probes?.includes('cloudflare') && method === 'ICMP_PING' && (
+                            <Text size="xs" c="dimmed">
+                              Cloudflare 需要 ICMP 代理或 globalping:// 检测代理。
+                            </Text>
+                          )}
                           <Select
                             label="通知模板"
                             placeholder="关闭通知"
@@ -554,8 +699,42 @@ export default function Admin() {
                               updateMonitor(index, { notificationTemplateId: value ?? undefined })
                             }
                           />
+                          <NumberInput
+                            label="通知宽限期（秒，可选）"
+                            description="留空使用通知中的全局设置"
+                            placeholder={String((config.notification?.gracePeriod ?? 0) * 60)}
+                            min={0}
+                            max={86400}
+                            allowDecimal={false}
+                            allowNegative={false}
+                            value={notificationGracePeriodSeconds ?? ''}
+                            onChange={(value) =>
+                              updateOptionalMonitor(index, 'notificationGracePeriodSeconds', value)
+                            }
+                          />
                           <details>
                             <summary style={{ cursor: 'pointer' }}>附加设置</summary>
+                            <TextInput
+                              mt="sm"
+                              label="检测代理（可选）"
+                              placeholder="https:// 或 globalping://"
+                              value={checkProxy ?? ''}
+                              onChange={(event) =>
+                                updateMonitor(index, {
+                                  checkProxy: event.currentTarget.value || undefined,
+                                })
+                              }
+                            />
+                            <Checkbox
+                              mt="sm"
+                              label="代理不可用时尝试直接检测"
+                              checked={checkProxyFallback ?? false}
+                              onChange={(event) =>
+                                updateMonitor(index, {
+                                  checkProxyFallback: event.currentTarget.checked,
+                                })
+                              }
+                            />
                             <Textarea
                               mt="sm"
                               label="JSON"

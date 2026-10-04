@@ -6,6 +6,7 @@ export type NativeFailureStage =
   | 'body'
   | 'configuration'
   | 'proxy'
+  | 'icmp'
   | 'unknown'
 export type NativeDiagnostic = { stage: NativeFailureStage; code: string; message: string }
 export type NativeCheckStatus = {
@@ -14,10 +15,13 @@ export type NativeCheckStatus = {
   err: string
   stage?: NativeFailureStage
   code?: string
+  certificate_expires_at?: number
+  certificate_days_remaining?: number
+  icmp_latency_ms?: number
 }
 type Context = 'http' | 'tcp' | 'body' | 'configuration' | 'proxy'
 
-const stages = new Set(['dns', 'tcp', 'tls', 'http', 'body', 'configuration', 'proxy', 'unknown'])
+const stages = new Set(['dns', 'tcp', 'tls', 'http', 'body', 'configuration', 'proxy', 'icmp', 'unknown'])
 const statusMessage = /^Expected codes: (?:\[[\d, ]{1,160}\]|2xx), Got: \d{3}$/
 
 export function parseNativeTcpTarget(target: string): { hostname: string; port: number } {
@@ -66,8 +70,10 @@ function safeMessage(stage: NativeFailureStage, code: string, original: string):
     if (code === 'too_large') return 'HTTP response body exceeds the 1 MiB limit'
     return 'Failed while reading the HTTP response body'
   }
-  if (stage === 'configuration') return 'Invalid or unsupported monitor configuration'
-  if (stage === 'proxy') return 'The check proxy failed to return a usable result'
+  if (stage === 'configuration') return code === 'permission' ? 'ICMP socket permission denied; configure ping socket access or a proxy' : code === 'unsupported' ? 'Native ICMP is unsupported on this platform; configure a proxy' : 'Invalid or unsupported monitor configuration'
+  if (stage === 'http') return code === 'timeout' ? 'Waiting for the HTTP response timed out' : code === 'canceled' ? 'HTTP check was canceled' : 'HTTP connection failed'
+  if (stage === 'proxy') return code === 'timeout' ? 'The check proxy timed out' : 'The check proxy failed to return a usable result'
+  if (stage === 'icmp') return ({ timeout: 'ICMP echo timed out', unreachable: 'ICMP target is unreachable', permission: 'ICMP permission denied', unsupported: 'Native ICMP is unsupported on this platform' }[code] ?? 'ICMP echo failed')
   if (stage === 'dns')
     return code === 'timeout'
       ? 'DNS resolution timed out'
@@ -75,7 +81,7 @@ function safeMessage(stage: NativeFailureStage, code: string, original: string):
       ? 'DNS name was not found'
       : 'DNS resolution failed'
   if (stage === 'tls')
-    return code === 'certificate' ? 'TLS certificate validation failed' : 'TLS handshake failed'
+    return code === 'certificate' ? 'TLS certificate validation failed' : code === 'expiring' ? 'TLS certificate expires within the configured threshold' : code === 'timeout' ? 'TLS handshake timed out' : 'TLS handshake failed'
   if (stage === 'tcp')
     return (
       {
@@ -104,18 +110,21 @@ export function classifyNativeFailure(error: unknown, context: Context = 'http')
     const allowedCodes: Record<NativeFailureStage, string[]> = {
       dns: ['not_found', 'timeout', 'unknown'],
       tcp: ['timeout', 'refused', 'reset', 'unreachable', 'unknown'],
-      tls: ['certificate', 'unknown'],
-      http: ['status', 'unknown'],
+      tls: ['certificate', 'expiring', 'timeout', 'unknown'],
+      http: ['status', 'timeout', 'canceled', 'reset', 'closed', 'unknown'],
       body: ['keyword', 'read', 'timeout', 'too_large', 'unknown'],
-      configuration: ['invalid_request', 'invalid_target', 'unknown'],
-      proxy: ['unknown'],
+      configuration: ['invalid_request', 'invalid_target', 'target', 'method', 'header', 'keyword', 'request', 'certificate_threshold', 'permission', 'unsupported', 'unknown'],
+      proxy: ['timeout', 'refused', 'status', 'invalid_response', 'unknown'],
+      icmp: ['timeout', 'canceled', 'unreachable', 'permission', 'unsupported', 'unknown'],
       unknown: ['timeout', 'unknown'],
     }
     const code = allowedCodes[prefixed.stage].includes(prefixed.code) ? prefixed.code : 'unknown'
     return { ...prefixed, code, message: safeMessage(prefixed.stage, code, prefixed.message) }
   }
-  if (context === 'proxy' || /^Globalping error:/i.test(text))
-    return diagnostic('proxy', 'unknown', safeMessage('proxy', 'unknown', ''))
+  if (context === 'proxy' || /^Globalping error:/i.test(text)) {
+    const code = /timed? out|timeout|AbortError|aborted/i.test(text) ? 'timeout' : /ECONNREFUSED|connection refused/i.test(text) ? 'refused' : 'unknown'
+    return diagnostic('proxy', code, safeMessage('proxy', code, ''))
+  }
   if (
     context === 'configuration' ||
     /invalid (?:url|target|port)|unsupported (?:url|protocol|method)|invalid.*(?:header|method)|GET\/HEAD method cannot have body/i.test(

@@ -163,8 +163,8 @@ describe('native monitor incident diagnostics', () => {
     expect(result.status).toMatchObject({
       up: false,
       stage: 'proxy',
-      code: 'unknown',
-      err: '[proxy/unknown] The check proxy failed to return a usable result',
+      code: 'refused',
+      err: '[proxy/refused] The check proxy failed to return a usable result',
     })
     fetchMock
       .mockRejectedValueOnce(new Error('Proxy failed'))

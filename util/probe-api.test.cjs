@@ -44,14 +44,29 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
     }
   }
   const mocks = {
+    '@/util/maintenance': {
+      getPresentationSettings: () => ({ page: {}, maintenances: workerConfig.maintenances ?? [] }),
+      expandMaintenances: (plans) => plans,
+    },
     '@/util/monitor-settings': settingsModule.exports,
     '@/worker/src/diagnostics': diagnosticModule.exports,
     '@/worker/src/settings': { getRuntimeConfig: async () => workerConfig },
     '@/uptime.config': { workerConfig, maintenances: [] },
     '@/worker/src/probes': {
+      getProbeIncidents: async () => {
+        calls.probeReads++
+        if (summaries.storageFailure) throw new Error('D1 SQL SELECT private-target-secret failed')
+        return summaries.probes
+      },
       getProbeSummaries: async () => {
         calls.probeReads++
         return summaries
+      },
+    },
+    '@/worker/src/incident-history': {
+      getNativeIncidents: async () => {
+        calls.nativeReads++
+        return summaries.native
       },
     },
     '@/worker/src/store': {
@@ -81,6 +96,10 @@ const external = {
   target: 'https://private.test',
   probes: ['a'],
   headers: { Authorization: 'private-target-secret' },
+  checkProxy: 'https://private-proxy.example/secret-path',
+  icmpProxyURL: 'https://private-icmp.example/secret-path',
+  checkProxyHeaders: { Authorization: 'private-proxy-secret' },
+  certificateExpiryDays: 14,
 }
 const makeSummary = (status) => ({
   monitorId: 'host',
@@ -108,6 +127,14 @@ test('public data includes external results before the native scheduler has writ
   assert.equal(value.monitors.host.reachableProbes, 1)
   assert.equal(JSON.stringify(value).includes('private-target-secret'), false)
   assert.equal(JSON.stringify(value).includes('private.test'), false)
+  for (const secret of [
+    'private-proxy.example',
+    'private-icmp.example',
+    'private-proxy-secret',
+    'checkProxyHeaders',
+    'certificateExpiryDays',
+  ])
+    assert.equal(JSON.stringify(value).includes(secret), false)
 })
 
 test('unknown external results and absent native records are not operational', async () => {
@@ -230,4 +257,59 @@ test('native data and badges use the target interval for freshness', async (t) =
     const badgeValue = await (await badge.handler(request('/api/badge?id=host'))).json()
     assert.equal(badgeValue.message, expectedBadge)
   }
+})
+
+test('public incident pages use bounded public result shapes and protect private configuration', async () => {
+  const page = {
+    failures: [
+      {
+        time: 1000,
+        monitorId: 'host',
+        monitorName: 'Host',
+        probeId: 'a',
+        probeName: 'Tokyo',
+        stage: 'tcp',
+        code: 'refused',
+        message: 'TCP connection was refused',
+      },
+    ],
+    nextCursor: null,
+    from: 0,
+    to: 2000,
+  }
+  const { handler } = loadHandler(
+    'incidents',
+    { monitors: [external] },
+    { probes: page, native: { incidents: [], nextCursor: null, from: 0, to: 2000 } }
+  )
+  const response = await handler(request('/api/incidents?kind=all&from=0&to=2000'))
+  assert.equal(response.status, 200)
+  const body = await response.text()
+  assert.equal(JSON.parse(body).probes.failures[0].monitorName, 'Host')
+  for (const secret of [
+    'private.test',
+    'private-target-secret',
+    'private-proxy.example',
+    'private-icmp.example',
+    'private-proxy-secret',
+    'checkProxyHeaders',
+  ])
+    assert.equal(body.includes(secret), false)
+})
+
+test('incident API rejects invalid requests before reads and masks storage errors', async () => {
+  const { handler, calls } = loadHandler(
+    'incidents',
+    { monitors: [external] },
+    { storageFailure: true }
+  )
+  assert.equal((await handler(request('/api/incidents', 'POST'))).status, 405)
+  assert.equal((await handler(request('/api/incidents?kind=sql'))).status, 400)
+  assert.equal((await handler(request('/api/incidents?from=NaN'))).status, 400)
+  assert.deepEqual(calls, { nativeReads: 0, probeReads: 0 })
+  const response = await handler(request('/api/incidents?kind=probes'))
+  assert.equal(response.status, 503)
+  const body = await response.text()
+  assert.equal(body.includes('SELECT'), false)
+  assert.equal(body.includes('private-target-secret'), false)
 })

@@ -8,7 +8,16 @@ export type ProbeDefinition = {
   defaultName?: string
   defaultLocation?: string
 }
-export type ProbeStage = 'dns' | 'tcp' | 'tls' | 'http' | 'body' | 'configuration' | 'unknown'
+export type ProbeStage =
+  | 'dns'
+  | 'tcp'
+  | 'tls'
+  | 'http'
+  | 'body'
+  | 'icmp'
+  | 'proxy'
+  | 'configuration'
+  | 'unknown'
 export type ProbeResult = {
   monitor_id: string
   time: number
@@ -17,6 +26,9 @@ export type ProbeResult = {
   stage?: ProbeStage
   code?: string
   message?: string
+  certificate_expires_at?: number
+  certificate_days_remaining?: number
+  icmp_latency_ms?: number
 }
 export type ProbeBatch = { version: 1; batch_id: string; results: ProbeResult[] }
 export type ProbeHistoryBucket = {
@@ -25,7 +37,40 @@ export type ProbeHistoryBucket = {
   failures: number
   avgLatencyMs: number | null
 }
+/** UTC daily totals. Uptime measures received checks; missing data is not a failure. */
+export type ProbeDailyBucket = ProbeHistoryBucket & {
+  uptimePercent: number | null
+  /** Checks in wholly successful five-minute buckets, used for latency averaging. */
+  latencyChecks: number
+}
 export type ProbeFailure = { time: number; stage: string; code: string; message: string }
+export type ProbeFailureRow = ProbeFailure & {
+  monitorId: string
+  monitorName: string
+  probeId: string
+  probeName: string
+}
+export type ProbeIncidentPage = {
+  failures: ProbeFailureRow[]
+  nextCursor: string | null
+  from: number
+  to: number
+}
+export type NativeIncidentRow = {
+  monitorId: string
+  monitorName: string
+  start: number
+  end: number | null
+  continued: boolean
+  stale: boolean
+  reasons: ProbeFailure[]
+}
+export type NativeIncidentPage = {
+  incidents: NativeIncidentRow[]
+  nextCursor: string | null
+  from: number
+  to: number
+}
 export type ProbeSummary = {
   id: string
   name: string
@@ -37,11 +82,17 @@ export type ProbeSummary = {
   stage?: string
   code?: string
   message?: string
+  certificateExpiresAt?: number
+  certificateDaysRemaining?: number
+  icmpLatencyMs?: number
   checks: number
   failures: number
   avgLatencyMs: number | null
   failureStages: Record<string, number>
   history: ProbeHistoryBucket[]
+  dailyHistory: ProbeDailyBucket[]
+  uptimePercent: number | null
+  retainedFrom: number | null
   recentFailures: ProbeFailure[]
 }
 export type ProbeMonitorSummary = {
@@ -52,5 +103,8 @@ export type ProbeMonitorSummary = {
   unknown: number
   total: number
   latest: number | null
+  dailyHistory: ProbeDailyBucket[]
+  uptimePercent: number | null
+  retainedFrom: number | null
   probes: ProbeSummary[]
 }

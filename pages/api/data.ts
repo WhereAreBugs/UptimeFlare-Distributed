@@ -1,4 +1,5 @@
-import { maintenances, workerConfig as fallbackConfig } from '@/uptime.config'
+import { workerConfig as fallbackConfig } from '@/uptime.config'
+import { getPresentationSettings, expandMaintenances } from '@/util/maintenance'
 import { NextRequest } from 'next/server'
 import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
 import { getRuntimeConfig } from '@/worker/src/settings'
@@ -100,7 +101,7 @@ export default async function handler(req: NextRequest): Promise<Response> {
     ...counts,
     updatedAt,
     monitors,
-    maintenances,
+    maintenances: expandMaintenances(getPresentationSettings(workerConfig).maintenances, Math.floor(Date.now()/1000)-86400, Math.floor(Date.now()/1000)+30*86400),
   }
 
   return new Response(JSON.stringify(ret), {

@@ -1,7 +1,7 @@
-import { MonitorState, MonitorTarget } from '@/types/config'
+import { MaintenanceConfig, MonitorState, MonitorTarget, PageConfig } from '@/types/config'
 import { Accordion, Card, Center, Text } from '@mantine/core'
 import MonitorDetail from './MonitorDetail'
-import { pageConfig } from '@/uptime.config'
+import { pageConfig as fallbackPageConfig } from '@/uptime.config'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
@@ -12,19 +12,28 @@ export default function MonitorList({
   state,
   probeSummaries = {},
   now = Math.round(Date.now() / 1000),
+  page = fallbackPageConfig,
+  maintenances,
 }: {
   monitors: MonitorTarget[]
   state: MonitorState
   probeSummaries?: Record<string, ProbeMonitorSummary>
   now?: number
+  page?: PageConfig
+  maintenances?: MaintenanceConfig[]
 }) {
   const { t } = useTranslation('common')
-  const group = { ...pageConfig.group }
+  const group = { ...page.group }
   if (Object.keys(group).length) {
     const ungrouped = monitors.filter(
       (monitor) => !Object.values(group).some((ids) => ids.includes(monitor.id))
     )
-    if (ungrouped.length) group[t('Probe other monitors')] = ungrouped.map((monitor) => monitor.id)
+    if (ungrouped.length) {
+      let name = t('Probe other monitors')
+      let suffix = 2
+      while (Object.hasOwn(group, name)) name = `${t('Probe other monitors')} (${suffix++})`
+      group[name] = ungrouped.map((monitor) => monitor.id)
+    }
   }
   const groupedMonitor = group && Object.keys(group).length > 0
   let content
@@ -76,9 +85,11 @@ export default function MonitorList({
                     justifyContent: 'space-between',
                     width: '100%',
                     alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '4px 12px',
                   }}
                 >
-                  <div>{groupName}</div>
+                  <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{groupName}</div>
                   <Text
                     fw={500}
                     style={{
@@ -106,6 +117,7 @@ export default function MonitorList({
                           state={state}
                           probeSummaries={probeSummaries}
                           now={now}
+                          maintenances={maintenances}
                         />
                       </Card.Section>
                     </div>
@@ -126,6 +138,7 @@ export default function MonitorList({
             state={state}
             probeSummaries={probeSummaries}
             now={now}
+            maintenances={maintenances}
           />
         </Card.Section>
       </div>

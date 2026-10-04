@@ -353,7 +353,7 @@ describe('configuration validation', () => {
       new Set(['a'])
     )
     expect(config.monitors[0].target).toBe('example.com:443')
-    expect(config.monitors[0].checkProxy).toBeUndefined()
+    expect(config.monitors[0].checkProxy).toBe('https://unwanted')
     expect((config as any).callbacks).toBeUndefined()
   })
 })

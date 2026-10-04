@@ -1,6 +1,11 @@
 import type { MonitorState, MonitorTarget } from '../types/config'
-import type { ProbeHistoryBucket, ProbeMonitorSummary, ProbeSummary } from '../types/probes'
-import { getMonitorStaleAfterSeconds } from './monitor-settings'
+import type {
+  ProbeDailyBucket,
+  ProbeHistoryBucket,
+  ProbeMonitorSummary,
+  ProbeSummary,
+} from '../types/probes'
+import { getMonitorIntervalSeconds, getMonitorStaleAfterSeconds } from './monitor-settings'
 
 export type MonitorStatus = 'up' | 'degraded' | 'down' | 'unknown'
 
@@ -57,7 +62,7 @@ export function summarizeProbeHistory(
       failures += bucket.failures
       if (bucket.failures === 0) up++
       else if (bucket.failures === bucket.checks) down++
-      if (bucket.avgLatencyMs !== null) {
+      if (bucket.failures === 0 && bucket.avgLatencyMs !== null) {
         latencySum += bucket.avgLatencyMs * bucket.checks
         latencyChecks += bucket.checks
       }
@@ -71,9 +76,85 @@ export function summarizeProbeHistory(
       total: probes.length,
       checks,
       failures,
-      avgLatencyMs: latencyChecks ? latencySum / latencyChecks : null,
+      avgLatencyMs: failures === 0 && latencyChecks ? latencySum / latencyChecks : null,
     }
   })
+}
+
+/** Fill absent days with null; never infer a check or failure from an offline probe. */
+export function summarizeProbeDailyHistory(
+  probes: Pick<ProbeSummary, 'dailyHistory'>[],
+  now: number
+): ProbeDailyBucket[] {
+  const days = new Map<number, ProbeDailyBucket>()
+  for (const probe of probes) {
+    for (const bucket of probe.dailyHistory ?? []) {
+      const day = days.get(bucket.time) ?? {
+        time: bucket.time,
+        checks: 0,
+        failures: 0,
+        avgLatencyMs: null,
+        latencyChecks: 0,
+        uptimePercent: null,
+      }
+      const previousSum = (day.avgLatencyMs ?? 0) * day.latencyChecks
+      day.checks += bucket.checks
+      day.failures += bucket.failures
+      day.latencyChecks += bucket.latencyChecks
+      day.avgLatencyMs = day.latencyChecks
+        ? (previousSum + (bucket.avgLatencyMs ?? 0) * bucket.latencyChecks) / day.latencyChecks
+        : null
+      day.uptimePercent = day.checks ? (100 * (day.checks - day.failures)) / day.checks : null
+      days.set(bucket.time, day)
+    }
+  }
+  const end = Math.floor(now / 86400) * 86400
+  return Array.from({ length: 90 }, (_, index) => {
+    const time = end - (89 - index) * 86400
+    return (
+      days.get(time) ?? {
+        time,
+        checks: 0,
+        failures: 0,
+        avgLatencyMs: null,
+        latencyChecks: 0,
+        uptimePercent: null,
+      }
+    )
+  })
+}
+
+/** Native latency records encode failed checks as zero; incidents disambiguate true zero latency. */
+export function nativeLatencyPoints(
+  monitor: Pick<MonitorTarget, 'id' | 'intervalSeconds'>,
+  state: MonitorState
+) {
+  const points: { x: number; y: number | null; loc: string }[] = []
+  const cadence = Math.ceil(getMonitorIntervalSeconds(monitor) / 60) * 60
+  const incidents = (state.incident[monitor.id] ?? []).filter(
+    (incident) => incident.error[0] !== 'dummy'
+  )
+  let incidentIndex = 0
+  let previous: number | undefined
+  for (const point of state.latency[monitor.id] ?? []) {
+    if (previous !== undefined && point.time - previous > cadence) {
+      points.push({ x: (previous + cadence) * 1000, y: null, loc: '' })
+    }
+    while (
+      incidents[incidentIndex]?.end !== null &&
+      incidents[incidentIndex]?.end !== undefined &&
+      incidents[incidentIndex].end! <= point.time
+    )
+      incidentIndex++
+    const incident = incidents[incidentIndex]
+    const failed =
+      !!incident &&
+      incident.start[0] <= point.time &&
+      (incident.end === null || point.time < incident.end)
+    points.push({ x: point.time * 1000, y: failed ? null : point.ping, loc: point.loc })
+    previous = point.time
+  }
+  return points
 }
 
 // Recheck freshness while a page is open: stale success must never remain green.

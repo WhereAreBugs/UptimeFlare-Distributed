@@ -42,6 +42,9 @@ async function scheduleInputs(monitors: MonitorTarget[]) {
         responseForbiddenKeyword: monitor.responseForbiddenKeyword,
         checkProxy: monitor.checkProxy,
         checkProxyFallback: monitor.checkProxyFallback,
+        checkProxyHeaders: Object.entries(monitor.checkProxyHeaders ?? {}).sort(([a],[b]) => a.localeCompare(b)),
+        icmpProxyURL: monitor.icmpProxyURL,
+        certificateExpiryDays: monitor.certificateExpiryDays,
       })
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(configuration))
       const fingerprint = Array.from(new Uint8Array(digest), (byte) =>

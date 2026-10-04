@@ -7,14 +7,18 @@ import {
 } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { useState } from 'react'
-import type { MonitorTarget } from '@/types/config'
+import type { MaintenanceConfig, MonitorTarget } from '@/types/config'
 import type { ProbeMonitorSummary, ProbeSummary } from '@/types/probes'
 import {
   refreshProbeSummary,
   statusColors,
   summarizeProbeHistory,
+  summarizeProbeDailyHistory,
   type MonitorStatus,
 } from '@/util/probe-status'
+import ProbeHistoryChart from './ProbeHistoryChart'
+import ProbeDailyHistory from './ProbeDailyHistory'
+import { maintenances as fallbackMaintenances } from '@/uptime.config'
 
 const historyColors = { ...statusColors, degraded: '#eab308' }
 
@@ -48,6 +52,9 @@ function emptyProbe(id: string, index: number): ProbeSummary {
     avgLatencyMs: null,
     failureStages: {},
     history: [],
+    dailyHistory: [],
+    uptimePercent: null,
+    retainedFrom: null,
     recentFailures: [],
   }
 }
@@ -127,10 +134,12 @@ function ProbeDetails({
   probe,
   now,
   hideLatency,
+  monitorId,
 }: {
   probe: ProbeSummary
   now: number
   hideLatency?: boolean
+  monitorId: string
 }) {
   const { t } = useTranslation('common')
   const [showFailures, setShowFailures] = useState(false)
@@ -156,6 +165,19 @@ function ProbeDetails({
           </Text>
         )}
       </Group>
+      {probe.certificateExpiresAt !== undefined && (
+        <Text size="sm">
+          {t('Probe certificate expiry')}:{' '}
+          {new Date(probe.certificateExpiresAt * 1000).toLocaleString()}
+          {' · '}
+          {t('Probe certificate days', {
+            days: ((probe.certificateExpiresAt - now) / 86400).toFixed(1),
+          })}
+        </Text>
+      )}
+      {probe.icmpLatencyMs !== undefined && (
+        <Text size="sm">ICMP: {probe.icmpLatencyMs.toFixed(1)} ms</Text>
+      )}
       {probe.stage && (
         <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
           {t('Probe last failure')}: {stageLabel(probe.stage)} · {probe.code}
@@ -173,6 +195,9 @@ function ProbeDetails({
           </Text>
         )}
       </Group>
+      <Text size="xs" c="dimmed">
+        {t('Probe successful bucket average explanation')}
+      </Text>
       <div>
         <Text size="sm" fw={500} mb={5}>
           {t('Probe failure statistics')}
@@ -191,6 +216,8 @@ function ProbeDetails({
         </Group>
       </div>
       <ProbeHistory probes={[probe]} name={probe.name} now={now} />
+      <ProbeDailyHistory days={summarizeProbeDailyHistory([probe], now)} monitorId={monitorId} />
+      <ProbeHistoryChart probes={[probe]} now={now} hideLatency={hideLatency} />
       {!!probe.recentFailures.length && (
         <details onToggle={(event) => setShowFailures(event.currentTarget.open)}>
           <summary style={{ cursor: 'pointer', fontSize: 14 }}>
@@ -198,6 +225,10 @@ function ProbeDetails({
           </summary>
           <Text size="xs" c="dimmed" mt={6}>
             {t('Probe failure history limit')}
+            {' · '}
+            <a href={`/incidents?monitor=${encodeURIComponent(monitorId)}`}>
+              {t('Probe full incident history')}
+            </a>
           </Text>
           {showFailures && (
             <div style={{ overflow: 'auto', maxHeight: 340 }}>
@@ -235,10 +266,12 @@ export default function ProbeMonitorDetail({
   monitor,
   summary,
   now,
+  maintenances = fallbackMaintenances,
 }: {
   monitor: MonitorTarget
   summary?: ProbeMonitorSummary
   now: number
+  maintenances?: MaintenanceConfig[]
 }) {
   const { t } = useTranslation('common')
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null)
@@ -246,6 +279,12 @@ export default function ProbeMonitorDetail({
   const current = summary ? refreshProbeSummary(summary, now, monitor) : undefined
   const status = current?.status ?? 'unknown'
   const probes = current?.probes ?? monitor.probes?.map(emptyProbe) ?? []
+  const maintenance = maintenances.find(
+    (entry) =>
+      (!entry.monitors?.length || entry.monitors.includes(monitor.id)) &&
+      new Date(entry.start).getTime() <= now * 1000 &&
+      (!entry.end || new Date(entry.end).getTime() >= now * 1000)
+  )
   const totals = {
     up: current?.up ?? 0,
     total: (current?.up ?? 0) + (current?.down ?? 0),
@@ -256,7 +295,11 @@ export default function ProbeMonitorDetail({
         <Accordion.Control>
           <Group justify="space-between" gap="sm" wrap="wrap">
             <Group gap={6}>
-              <StatusIcon status={status} />
+              {maintenance ? (
+                <IconAlertTriangle size={20} color="#fab005" aria-hidden />
+              ) : (
+                <StatusIcon status={status} />
+              )}
               <Tooltip label={monitor.tooltip} disabled={!monitor.tooltip}>
                 <Text fw={700}>{monitor.name}</Text>
               </Tooltip>
@@ -268,15 +311,31 @@ export default function ProbeMonitorDetail({
               <Text size="sm" c="dimmed">
                 {t('Probe summary counts', totals)}
               </Text>
+              <Text size="sm" fw={600}>
+                {current?.uptimePercent === null || current?.uptimePercent === undefined
+                  ? t('No Data')
+                  : t('Overall', { percent: current.uptimePercent.toFixed(3) })}
+              </Text>
             </Group>
           </Group>
         </Accordion.Control>
         <Box px="md" pb="sm">
           <ProbeHistory probes={probes} name={monitor.name} now={now} />
+          <Box mt="sm">
+            <ProbeDailyHistory
+              days={summarizeProbeDailyHistory(probes, now)}
+              monitorId={monitor.id}
+            />
+          </Box>
         </Box>
         <Accordion.Panel>
           {expandedMonitor === monitor.id && (
             <>
+              {maintenance && (
+                <Text size="sm" c="yellow" mb="sm">
+                  {t('Probe scheduled maintenance')}
+                </Text>
+              )}
               {status !== 'up' && (
                 <Text size="sm" c="dimmed" mb="sm">
                   {t(
@@ -295,6 +354,13 @@ export default function ProbeMonitorDetail({
                   </a>
                 </Text>
               )}
+              <Box mb="md">
+                <ProbeHistoryChart
+                  probes={probes}
+                  now={now}
+                  hideLatency={monitor.hideLatencyChart}
+                />
+              </Box>
               <Accordion
                 multiple
                 variant="contained"
@@ -331,6 +397,7 @@ export default function ProbeMonitorDetail({
                           probe={probe}
                           now={now}
                           hideLatency={monitor.hideLatencyChart}
+                          monitorId={monitor.id}
                         />
                       )}
                     </Accordion.Panel>
