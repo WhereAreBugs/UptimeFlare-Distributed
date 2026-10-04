@@ -181,7 +181,16 @@ export default function ManagementTokenEditor({
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            if (!blocked && !loading && !secret) void run(create)
+            if (
+              !blocked &&
+              !loading &&
+              !secret &&
+              name.trim() &&
+              groupIds.length &&
+              permissions.length &&
+              activeCount < 100
+            )
+              void run(create)
           }}
         >
           <Stack>
@@ -202,7 +211,7 @@ export default function ManagementTokenEditor({
               }))}
               value={groupIds}
               searchable
-              required
+              withAsterisk
               disabled={blocked || loading || !!secret}
               onChange={setGroupIds}
             />
