@@ -6,7 +6,11 @@ import type {
   WorkerConfig,
 } from '../../types/config'
 import type { ProbeMonitorSummary, ProbeSummary } from '../../types/probes'
-import type { PublicDashboard, PublicDashboardSnapshot } from '../../types/public-dashboard'
+import type {
+  PublicDashboard,
+  PublicDashboardSnapshot,
+  PublicMonitor,
+} from '../../types/public-dashboard'
 import { PUBLIC_SNAPSHOT_MAX_AGE_SECONDS } from '../../types/public-dashboard'
 import { getPresentationSettings } from '../../util/maintenance'
 import { getMonitorIntervalSeconds } from '../../util/monitor-settings'
@@ -15,6 +19,7 @@ import { getProbeDashboardSummaries, type ProbeEnv } from './probes'
 import { getRuntimeConfig } from './settings'
 import { getPublicNativeState } from './store'
 import { parseNativeDiagnostic } from './diagnostics'
+import { publicLink } from './privacy'
 
 export const PUBLIC_DASHBOARD_KEY = 'public-dashboard:v1'
 export const PUBLIC_CONFIGURATION_KEY = 'public-dashboard-config:v1'
@@ -34,7 +39,7 @@ const number = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
 
 /** Allowlisting is applied on both publication and consumption, including manually seeded snapshots. */
-export function publicMonitors(source: unknown): MonitorTarget[] {
+export function publicMonitors(source: unknown): PublicMonitor[] {
   if (!Array.isArray(source) || source.length > 100) throw new Error('Invalid public monitor list')
   const ids = new Set<string>()
   return source.map((raw) => {
@@ -56,9 +61,7 @@ export function publicMonitors(source: unknown): MonitorTarget[] {
           : getMonitorIntervalSeconds({}),
       ...(value.paused === true && { paused: true }),
       ...(typeof value.tooltip === 'string' && { tooltip: string(value.tooltip) }),
-      ...(typeof value.statusPageLink === 'string' && {
-        statusPageLink: string(value.statusPageLink),
-      }),
+      ...(publicLink(value.statusPageLink) && { statusPageLink: publicLink(value.statusPageLink) }),
       ...(typeof value.hideLatencyChart === 'boolean' && {
         hideLatencyChart: value.hideLatencyChart,
       }),
@@ -76,15 +79,18 @@ function publicPage(source: unknown, ids: Set<string>): PageConfig {
     result: PageConfig = {}
   for (const key of ['title', 'logo', 'favicon', 'customFooter'] as const) {
     const text = string(value[key], key === 'customFooter' ? 16384 : 4096)
-    if (text !== undefined) result[key] = text
+    if (text !== undefined) {
+      if (key === 'logo' || key === 'favicon') result[key] = publicLink(text)
+      else result[key] = text
+    }
   }
   if (Array.isArray(value.links))
     result.links = value.links.slice(0, 50).flatMap((raw) => {
       const link = record(raw)
-      return typeof link.link === 'string' && typeof link.label === 'string'
+      return publicLink(link.link) && typeof link.label === 'string'
         ? [
             {
-              link: string(link.link)!,
+              link: publicLink(link.link)!,
               label: string(link.label, 200)!,
               ...(link.highlight === true && { highlight: true }),
             },

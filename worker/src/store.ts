@@ -1,3 +1,4 @@
+import { classifyNativeFailure, formatNativeDiagnostic } from './diagnostics'
 import type { Env } from '.'
 import {
   IncidentRecord,
@@ -54,7 +55,14 @@ export async function getPublicNativeState(
     const latency = source.latency[id]
     if (incident)
       state.incident[id] = history
-        ? incident
+        ? {
+            ...incident,
+            error: incident.error.map((errors) =>
+              errors.map((error) =>
+                error === 'dummy' ? error : formatNativeDiagnostic(classifyNativeFailure(error))
+              )
+            ),
+          }
         : {
             start: incident.start.slice(-1).map((times) => times.slice(-1)),
             end: incident.end.slice(-1),

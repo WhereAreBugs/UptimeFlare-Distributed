@@ -1,3 +1,4 @@
+import { publicFailure } from './privacy'
 import {
   DEFAULT_MONITOR_TIMEOUT_MS,
   getMonitorIntervalSeconds,
@@ -742,7 +743,12 @@ async function readProbeSummaries(
   const failures = new Map<string, ProbeSummary['recentFailures']>()
   for (const row of failuresData.results as Latest[]) {
     const values = failures.get(key(row)) || []
-    values.push({ time: row.time, stage: row.stage, code: row.code, message: row.message })
+    values.push({
+      time: row.time,
+      stage: row.stage,
+      code: row.code,
+      message: publicFailure(row.stage, row.code, row.message).message,
+    })
     failures.set(key(row), values)
   }
   const labels = new Map(definitions.map((probe) => [probe.id, probe]))
@@ -945,7 +951,7 @@ export async function getProbeIncidents(
         time: row.time,
         stage: row.stage,
         code: row.code,
-        message: row.message,
+        message: publicFailure(row.stage, row.code, row.message).message,
         monitorId: monitor.id,
         monitorName: monitor.name,
         probeId: row.probe_id,
