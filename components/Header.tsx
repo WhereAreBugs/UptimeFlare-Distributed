@@ -44,8 +44,8 @@ export default function Header({
           >
             <Image
               src={page.logo ?? '/brand/status-suzume.webp'}
-              h={56}
-              w={{ base: 140, sm: 190 }}
+              h={48}
+              w={{ base: 128, sm: 176 }}
               fit="contain"
               alt="Status"
             />
