@@ -43,11 +43,11 @@ export default function Header({
             rel={pathname === '/' ? 'noreferrer' : undefined}
           >
             <Image
-              src={page.logo ?? '/logo.svg'}
+              src={page.logo ?? '/brand/status-suzume.webp'}
               h={56}
               w={{ base: 140, sm: 190 }}
               fit="contain"
-              alt="logo"
+              alt="Status"
             />
           </a>
         </div>

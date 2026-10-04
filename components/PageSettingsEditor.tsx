@@ -38,7 +38,7 @@ export default function PageSettingsEditor({
           />
           <TextInput
             label="Logo 地址"
-            placeholder="/logo.svg"
+            placeholder="/brand/status-suzume.webp"
             value={value.logo ?? ''}
             onChange={(event) => stringField('logo', event.currentTarget.value)}
           />
