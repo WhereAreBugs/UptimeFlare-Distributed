@@ -57,6 +57,16 @@ export default async function handler(req: NextRequest): Promise<Response> {
         status: 404,
         headers: jsonHeaders,
       })
+    if (monitor.paused)
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 1,
+          label,
+          message: url.searchParams.get('paused') ?? 'CLOSED',
+          color: url.searchParams.get('colorPaused') ?? 'lightgrey',
+        } satisfies BadgePayload),
+        { headers: jsonHeaders }
+      )
     let status: MonitorStatus = 'unknown'
     if (monitor.probes?.length) {
       const summaries = await getProbeSummaries(
@@ -65,7 +75,8 @@ export default async function handler(req: NextRequest): Promise<Response> {
         workerConfig.probes,
         Math.round(Date.now() / 1000)
       )
-      status = summaries[monitor.id].status
+      const summary = summaries[monitor.id]
+      status = summary.status === 'paused' ? 'unknown' : summary.status
     } else {
       const compactedState = new CompactedMonitorStateWrapper(
         await getFromStore(process.env as any, 'state')

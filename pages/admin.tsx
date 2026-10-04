@@ -1,9 +1,11 @@
 import Head from 'next/head'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { IconArrowLeft } from '@tabler/icons-react'
+import { useTranslation } from 'react-i18next'
+import { IconArrowLeft, IconPlayerPause, IconPlayerPlay } from '@tabler/icons-react'
 import {
   Alert,
+  Badge,
   Button,
   Checkbox,
   Container,
@@ -75,6 +77,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
   return result
 }
 export default function Admin() {
+  const { t } = useTranslation('common')
   const [config, setConfig] = useState<Config | null>(null)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -167,6 +170,7 @@ export default function Admin() {
         name: monitor.name,
         target: monitor.target,
         method: monitor.method,
+        paused: monitor.paused ?? false,
         probes: monitor.probes,
         intervalSeconds: monitor.intervalSeconds,
         timeout: monitor.timeout,
@@ -377,7 +381,14 @@ export default function Admin() {
                             <Stack gap={4}>
                               {assigned.map((monitor) => (
                                 <Group key={monitor.id} justify="space-between" gap="xs">
-                                  <Text size="sm">{monitor.name || '未命名目标'}</Text>
+                                  <Group gap="xs">
+                                    <Text size="sm">{monitor.name || '未命名目标'}</Text>
+                                    {monitor.paused && (
+                                      <Badge color="gray" variant="light" size="sm">
+                                        {t('Monitor paused')}
+                                      </Badge>
+                                    )}
+                                  </Group>
                                   <Text size="xs" c="dimmed">
                                     每 {getMonitorIntervalSeconds(monitor)} 秒 · 超时{' '}
                                     {(monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS) / 1000} 秒
@@ -498,6 +509,7 @@ export default function Admin() {
                               name: '新目标',
                               target: 'https://',
                               method: 'GET',
+                              paused: false,
                               probes: config.probes.map((p) => p.id),
                             },
                           ],
@@ -507,12 +519,16 @@ export default function Admin() {
                       添加目标
                     </Button>
                   </Group>
+                  <Text size="xs" c="dimmed">
+                    {t('Pause or resume changes apply after saving the configuration.')}
+                  </Text>
                   {config.monitors.map((monitor, index) => {
                     const {
                       id,
                       name,
                       target,
                       method,
+                      paused,
                       probes,
                       intervalSeconds,
                       timeout,
@@ -528,50 +544,78 @@ export default function Admin() {
                       <Paper withBorder p="md" key={id}>
                         <Stack>
                           <Group justify="space-between">
-                            <Text fw={600}>{name}</Text>
-                            <Button
-                              color="red"
-                              variant="subtle"
-                              onClick={() => {
-                                if (window.confirm('确认删除此目标及它的分组、维护关联？'))
-                                  setConfig({
-                                    ...config,
-                                    monitors: config.monitors.filter((_, i) => i !== index),
-                                    page: {
-                                      ...config.page,
-                                      group: Object.fromEntries(
-                                        Object.entries(config.page?.group ?? {}).map(
-                                          ([group, targets]) => [
-                                            group,
-                                            targets.filter((targetId) => targetId !== id),
-                                          ]
+                            <Group gap="xs">
+                              <Text fw={600}>{name}</Text>
+                              {paused && (
+                                <Badge color="gray" variant="light">
+                                  {t('Monitor paused')}
+                                </Badge>
+                              )}
+                            </Group>
+                            <Group gap="xs">
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color={paused ? 'blue' : 'gray'}
+                                disabled={busy}
+                                leftSection={
+                                  paused ? (
+                                    <IconPlayerPlay size={14} />
+                                  ) : (
+                                    <IconPlayerPause size={14} />
+                                  )
+                                }
+                                aria-label={`${t(paused ? 'Resume monitor' : 'Pause monitor')}: ${
+                                  name || '未命名目标'
+                                }`}
+                                onClick={() => updateMonitor(index, { paused: !paused })}
+                              >
+                                {t(paused ? 'Resume monitor' : 'Pause monitor')}
+                              </Button>
+                              <Button
+                                color="red"
+                                variant="subtle"
+                                onClick={() => {
+                                  if (window.confirm('确认删除此目标及它的分组、维护关联？'))
+                                    setConfig({
+                                      ...config,
+                                      monitors: config.monitors.filter((_, i) => i !== index),
+                                      page: {
+                                        ...config.page,
+                                        group: Object.fromEntries(
+                                          Object.entries(config.page?.group ?? {}).map(
+                                            ([group, targets]) => [
+                                              group,
+                                              targets.filter((targetId) => targetId !== id),
+                                            ]
+                                          )
+                                        ),
+                                      },
+                                      maintenances: config.maintenances
+                                        ?.filter(
+                                          (maintenance) =>
+                                            !maintenance.monitors?.includes(id) ||
+                                            maintenance.monitors.length > 1
                                         )
-                                      ),
-                                    },
-                                    maintenances: config.maintenances
-                                      ?.filter(
-                                        (maintenance) =>
-                                          !maintenance.monitors?.includes(id) ||
-                                          maintenance.monitors.length > 1
-                                      )
-                                      .map((maintenance) => ({
-                                        ...maintenance,
-                                        monitors: maintenance.monitors?.filter(
-                                          (targetId) => targetId !== id
-                                        ),
-                                      })),
-                                    notification: {
-                                      ...config.notification,
-                                      skipNotificationIds:
-                                        config.notification?.skipNotificationIds?.filter(
-                                          (targetId) => targetId !== id
-                                        ),
-                                    },
-                                  })
-                              }}
-                            >
-                              删除
-                            </Button>
+                                        .map((maintenance) => ({
+                                          ...maintenance,
+                                          monitors: maintenance.monitors?.filter(
+                                            (targetId) => targetId !== id
+                                          ),
+                                        })),
+                                      notification: {
+                                        ...config.notification,
+                                        skipNotificationIds:
+                                          config.notification?.skipNotificationIds?.filter(
+                                            (targetId) => targetId !== id
+                                          ),
+                                      },
+                                    })
+                                }}
+                              >
+                                删除
+                              </Button>
+                            </Group>
                           </Group>
                           <Group grow>
                             <TextInput

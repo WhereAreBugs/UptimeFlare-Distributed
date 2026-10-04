@@ -1,11 +1,20 @@
 import { MaintenanceConfig, MonitorState, MonitorTarget, PageConfig } from '@/types/config'
 import { Accordion, Card, Center, Text } from '@mantine/core'
 import MonitorDetail from './MonitorDetail'
-import { pageConfig as fallbackPageConfig } from '@/uptime.config'
+import {
+  pageConfig as fallbackPageConfig,
+  maintenances as fallbackMaintenances,
+} from '@/uptime.config'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
-import { aggregateStatus, statusColors, summarizeMonitors } from '@/util/probe-status'
+import {
+  categoryColors,
+  categoryLabels,
+  dashboardCategory,
+  summarizeDashboardMonitors,
+  type MonitorCategory,
+} from '@/util/dashboard-status'
 
 export default function MonitorList({
   monitors,
@@ -13,7 +22,7 @@ export default function MonitorList({
   probeSummaries = {},
   now = Math.round(Date.now() / 1000),
   page = fallbackPageConfig,
-  maintenances,
+  maintenances = fallbackMaintenances,
 }: {
   monitors: MonitorTarget[]
   state: MonitorState
@@ -75,7 +84,13 @@ export default function MonitorList({
       >
         {Object.keys(group).map((groupName) => {
           const members = monitors.filter((monitor) => group[groupName].includes(monitor.id))
-          const counts = summarizeMonitors(members, state, probeSummaries, now)
+          const counts = summarizeDashboardMonitors(
+            members,
+            state,
+            probeSummaries,
+            maintenances,
+            now
+          )
           return (
             <Accordion.Item key={groupName} value={groupName}>
               <Accordion.Control>
@@ -95,13 +110,12 @@ export default function MonitorList({
                     style={{
                       display: 'inline',
                       paddingRight: '5px',
-                      color:
-                        statusColors[
-                          aggregateStatus(counts.up, counts.down, counts.unknown, counts.degraded)
-                        ],
+                      color: categoryColors[dashboardCategory(counts)],
                     }}
                   >
-                    {t('Probe group counts', counts)}
+                    {(['healthy', 'closed', 'maintenance', 'abnormal'] as MonitorCategory[])
+                      .map((category) => `${t(categoryLabels[category])} ${counts[category]}`)
+                      .join(' · ')}
                   </Text>
                 </div>
               </Accordion.Control>
@@ -153,7 +167,7 @@ export default function MonitorList({
         radius="md"
         ml="md"
         mr="md"
-        mt="xl"
+        mt="md"
         withBorder={!groupedMonitor}
         style={{ width: '100%', maxWidth: groupedMonitor ? 897 : 865, minWidth: 0 }}
       >

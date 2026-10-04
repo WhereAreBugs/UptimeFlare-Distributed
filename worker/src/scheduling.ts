@@ -1,5 +1,7 @@
 import type { MonitorTarget } from '../../types/config'
 import type { ProbeEnv } from './probes'
+import { MAX_SCHEDULED_TARGETS_PER_CRON } from './limits'
+import { NOT_PAUSED_IN_SAVED_CONFIG } from './pause'
 import {
   DEFAULT_MONITOR_TIMEOUT_MS,
   getMonitorIntervalSeconds,
@@ -8,6 +10,7 @@ import {
 } from '../../util/monitor-settings'
 
 export type ScheduledClaim = { monitors: MonitorTarget[]; scope: string; key: string; time: number }
+export type ScheduledBudget = { remaining: number }
 type ScheduleRow = {
   monitor_id: string
   configuration_key: string
@@ -62,6 +65,7 @@ export async function hasDueMonitors(
   time: number,
   now = time
 ) {
+  monitors = monitors.filter(monitor => !monitor.paused)
   if (!monitors.length) return false
   const inputs = await scheduleInputs(monitors)
   const rows = await env.UPTIMEFLARE_D1.prepare(
@@ -90,26 +94,41 @@ export async function claimScheduledMonitors(
   scope: string,
   monitors: MonitorTarget[],
   time: number,
-  now = time
+  now = time,
+  budget?: ScheduledBudget,
+  scopeLimit = MAX_SCHEDULED_TARGETS_PER_CRON
 ): Promise<ScheduledClaim> {
   const key = crypto.randomUUID()
+  monitors = monitors.filter(monitor => !monitor.paused)
   if (!monitors.length) return { monitors: [], scope, key, time }
   const inputs = await scheduleInputs(monitors)
+  // Reserve a minute for persistence; a preceding native/Cloudflare batch shares the same Cron lifetime.
+  const timeoutSeconds = Math.ceil(Math.max(...monitors.map(m => m.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)) / 1000)
+  const budgetSeconds = Math.max(0, 840 - Math.max(0, now - time))
+  const batchLimit = Math.min(MAX_SCHEDULED_TARGETS_PER_CRON, scopeLimit, budget?.remaining ?? MAX_SCHEDULED_TARGETS_PER_CRON,
+    Math.floor(budgetSeconds / timeoutSeconds) * 5)
+  if (!batchLimit) return { monitors: [], scope, key, time }
   // Scheduled Workers have a 15 minute lifetime. A dead invocation can be reclaimed
   // after this bounded lease; the token fences any unexpectedly late completion.
   const leaseSeconds = Math.min(
     900,
     Math.max(
       120,
-      Math.ceil(Math.max(...monitors.map((m) => m.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)) / 1000) *
-        Math.ceil(monitors.length / 5) +
+      timeoutSeconds * Math.ceil(Math.min(monitors.length, batchLimit) / 5) +
         60
     )
   )
   const claimed = await env.UPTIMEFLARE_D1.prepare(
     `INSERT INTO monitor_schedule
     (scope,monitor_id,configuration_key,last_started_at,last_completed_at,lease_until,lease_key)
-    SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.fingerprint'),?,0,?,? FROM json_each(?) WHERE 1
+    SELECT ?,json_extract(input.value,'$.id'),json_extract(input.value,'$.fingerprint'),?,0,?,? FROM json_each(?) input
+    LEFT JOIN monitor_schedule previous ON previous.scope=? AND previous.monitor_id=json_extract(input.value,'$.id')
+    WHERE ${NOT_PAUSED_IN_SAVED_CONFIG("json_extract(input.value,'$.id')")} AND
+      (previous.monitor_id IS NULL OR (previous.last_started_at<? AND previous.lease_until<=? AND
+       (previous.configuration_key<>json_extract(input.value,'$.fingerprint') OR previous.last_completed_at=0 OR
+        previous.last_completed_at+json_extract(input.value,'$.interval')<=?)))
+    ORDER BY COALESCE(previous.last_completed_at,0),COALESCE(previous.last_started_at,0),json_extract(input.value,'$.id')
+    LIMIT ?
     ON CONFLICT(scope,monitor_id) DO UPDATE SET configuration_key=excluded.configuration_key,
       last_started_at=excluded.last_started_at,lease_until=excluded.lease_until,lease_key=excluded.lease_key
     WHERE monitor_schedule.last_started_at < excluded.last_started_at AND monitor_schedule.lease_until <= ? AND
@@ -117,9 +136,10 @@ export async function claimScheduledMonitors(
        monitor_schedule.last_completed_at + (SELECT json_extract(value,'$.interval') FROM json_each(?) WHERE json_extract(value,'$.id')=monitor_schedule.monitor_id) <= excluded.last_started_at)
     RETURNING monitor_id`
   )
-    .bind(scope, time, now + leaseSeconds, key, JSON.stringify(inputs), now, JSON.stringify(inputs))
+    .bind(scope, time, now + leaseSeconds, key, JSON.stringify(inputs), scope, time, now, time, batchLimit, now, JSON.stringify(inputs))
     .all<{ monitor_id: string }>()
   if (!claimed.success) throw new Error('Monitor schedule claim failed')
+  if (budget) budget.remaining -= claimed.results.length
   const ids = new Set(claimed.results.map((row) => row.monitor_id))
   return { monitors: monitors.filter((monitor) => ids.has(monitor.id)), scope, key, time }
 }
@@ -172,8 +192,11 @@ export function releaseNativeWriterStatement(env: ProbeEnv, key: string): D1Prep
 export async function cleanupMonitorSchedules(env: ProbeEnv, monitors: MonitorTarget[]) {
   await env.UPTIMEFLARE_D1.prepare(
     `DELETE FROM monitor_schedule WHERE (scope,monitor_id) IN
-    (SELECT scope,monitor_id FROM monitor_schedule WHERE scope<>'native-writer' AND monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000)`
+    (SELECT scope,monitor_id FROM monitor_schedule schedule WHERE scope<>'native-writer' AND monitor_id NOT IN (SELECT value FROM json_each(?))
+      AND NOT EXISTS (SELECT 1 FROM admin_config config,json_each(json_extract(config.value,'$.monitors')) monitor
+        WHERE config.id=1 AND json_extract(monitor.value,'$.id')=schedule.monitor_id
+          AND COALESCE(json_extract(monitor.value,'$.paused'),0)=0) LIMIT 1000)`
   )
-    .bind(JSON.stringify(monitors.map((monitor) => monitor.id)))
+    .bind(JSON.stringify(monitors.filter(monitor => !monitor.paused).map((monitor) => monitor.id)))
     .run()
 }

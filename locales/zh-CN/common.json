@@ -110,5 +110,16 @@
   "Probe incident continued": "开始时间早于当前窗口",
   "Probe no native incidents": "本月无原生故障事件。",
   "Probe stage icmp": "ICMP 回显",
-  "Probe incident awaiting report": "尚未记录恢复，等待新鲜检查数据"
+  "Probe incident awaiting report": "尚未记录恢复，等待新鲜检查数据",
+  "Closed": "关闭",
+  "Healthy": "正常",
+  "Maintenance": "维护",
+  "Abnormal": "异常",
+  "Monitor paused": "暂停监控",
+  "Pause monitor": "暂停",
+  "Resume monitor": "恢复",
+  "Monitor totals": "监控数量",
+  "Monitor paused history": "监控已暂停，以下保留历史结果。",
+  "Historical result": "历史结果",
+  "Pause or resume changes apply after saving the configuration.": "暂停或恢复在保存配置后生效。"
 }

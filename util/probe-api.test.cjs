@@ -21,6 +21,26 @@ settingsModule._compile(
   }).outputText,
   settingsFilename
 )
+const probeStatusFilename = path.resolve(__dirname, 'probe-status.ts')
+const probeStatusModule = new Module(probeStatusFilename, module)
+probeStatusModule.require = (id) =>
+  id === './monitor-settings' ? settingsModule.exports : require(id)
+probeStatusModule._compile(
+  ts.transpileModule(fs.readFileSync(probeStatusFilename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText,
+  probeStatusFilename
+)
+const dashboardFilename = path.resolve(__dirname, 'dashboard-status.ts')
+const dashboardModule = new Module(dashboardFilename, module)
+dashboardModule.require = (id) =>
+  id === './probe-status' ? probeStatusModule.exports : require(id)
+dashboardModule._compile(
+  ts.transpileModule(fs.readFileSync(dashboardFilename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText,
+  dashboardFilename
+)
 
 function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeIncident = null) {
   const calls = { nativeReads: 0, probeReads: 0 }
@@ -49,6 +69,7 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
       expandMaintenances: (plans) => plans,
     },
     '@/util/monitor-settings': settingsModule.exports,
+    '@/util/dashboard-status': dashboardModule.exports,
     '@/worker/src/diagnostics': diagnosticModule.exports,
     '@/worker/src/settings': { getRuntimeConfig: async () => workerConfig },
     '@/uptime.config': { workerConfig, maintenances: [] },
@@ -150,6 +171,70 @@ test('unknown external results and absent native records are not operational', a
   assert.equal(value.unknown, 2)
   assert.equal(value.monitors.host.up, null)
   assert.equal(value.monitors.native.up, null)
+})
+
+test('public paused results are closed before maintenance and expose historical data without live probe counts', async () => {
+  const now = Math.floor(Date.now() / 1000)
+  const monitors = [
+    { ...external, paused: true },
+    { ...external, id: 'maintained' },
+    { ...external, id: 'healthy' },
+    { ...external, id: 'unknown' },
+  ]
+  const pausedSummary = {
+    ...makeSummary('up'),
+    latest: now + 100,
+    probes: [{ id: 'a', history: [] }],
+  }
+  const { handler } = loadHandler(
+    'data',
+    {
+      monitors,
+      maintenances: [
+        {
+          start: new Date((now - 10) * 1000).toISOString(),
+          end: new Date((now + 10) * 1000).toISOString(),
+          body: 'Maintenance',
+          monitors: ['host', 'maintained'],
+        },
+      ],
+    },
+    {
+      host: pausedSummary,
+      maintained: makeSummary('down'),
+      healthy: makeSummary('up'),
+      unknown: makeSummary('unknown'),
+    }
+  )
+  const response = await handler(request('/api/data'))
+  assert.equal(response.status, 200)
+  const value = await response.json()
+  assert.deepEqual(
+    [value.healthy, value.closed, value.maintenance, value.abnormal, value.total],
+    [1, 1, 1, 1, 4]
+  )
+  assert.equal(value.monitors.host.status, 'paused')
+  assert.equal(value.monitors.host.category, 'closed')
+  assert.equal(value.monitors.host.up, null)
+  assert.equal(value.monitors.host.reachableProbes, null)
+  assert.equal(value.monitors.host.unreachableProbes, null)
+  assert.equal(value.monitors.host.unknownProbes, null)
+  assert.equal(value.updatedAt, 1000, 'a paused target does not update live freshness')
+  assert.deepEqual(value.monitors.host.probes, pausedSummary.probes)
+})
+
+test('an entirely paused native installation can return closed before its first state record', async () => {
+  const { handler } = loadHandler(
+    'data',
+    { monitors: [{ ...external, probes: undefined, paused: true }] },
+    {}
+  )
+  const response = await handler(request('/api/data'))
+  assert.equal(response.status, 200)
+  const value = await response.json()
+  assert.equal(value.closed, 1)
+  assert.equal(value.abnormal, 0)
+  assert.equal(value.monitors.host.up, null)
 })
 
 test('native public errors expose phase fields and preserve historical message text', async () => {

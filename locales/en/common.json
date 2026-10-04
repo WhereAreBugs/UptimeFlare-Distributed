@@ -110,5 +110,16 @@
   "Probe incident continued": "Started before this window",
   "Probe no native incidents": "No native incidents in this month.",
   "Probe stage icmp": "ICMP echo",
-  "Probe incident awaiting report": "Unresolved; waiting for fresh check data"
+  "Probe incident awaiting report": "Unresolved; waiting for fresh check data",
+  "Closed": "Closed",
+  "Healthy": "Healthy",
+  "Maintenance": "Maintenance",
+  "Abnormal": "Abnormal",
+  "Monitor paused": "Monitoring paused",
+  "Pause monitor": "Pause",
+  "Resume monitor": "Resume",
+  "Monitor totals": "Monitor totals",
+  "Monitor paused history": "Monitoring is paused. Previous results remain available.",
+  "Historical result": "Historical result",
+  "Pause or resume changes apply after saving the configuration.": "Pause or resume changes apply after saving the configuration."
 }

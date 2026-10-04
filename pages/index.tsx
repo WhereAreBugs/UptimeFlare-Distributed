@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next'
 import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
 import { getProbeSummaries } from '@/worker/src/probes'
 import type { ProbeMonitorSummary } from '@/types/probes'
-import { summarizeMonitors } from '@/util/probe-status'
+import { summarizeDashboardMonitors } from '@/util/dashboard-status'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { getMonitorIntervalSeconds } from '@/util/monitor-settings'
@@ -44,7 +44,10 @@ export default function Home({
   const [now, setNow] = useState(() => Math.round(Date.now() / 1000))
   const [monitorId, setMonitorId] = useState('')
   const windowMinute = Math.floor(now / 60)
-  const maintenances = useMemo(() => expandMaintenances(plans, windowMinute * 60 - 7 * 86400, windowMinute * 60 + 30 * 86400), [plans, windowMinute])
+  const maintenances = useMemo(
+    () => expandMaintenances(plans, windowMinute * 60 - 7 * 86400, windowMinute * 60 + 30 * 86400),
+    [plans, windowMinute]
+  )
   useEffect(() => {
     const updateHash = () => setMonitorId(window.location.hash.substring(1))
     updateHash()
@@ -80,7 +83,7 @@ export default function Home({
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [router, monitors])
-  const aggregate = summarizeMonitors(monitors, state, probeSummaries, now)
+  const aggregate = summarizeDashboardMonitors(monitors, state, probeSummaries, maintenances, now)
 
   // Specify monitorId in URL hash to view a specific monitor (can be used in iframe)
   if (monitorId) {
@@ -90,7 +93,13 @@ export default function Home({
     }
     return (
       <div style={{ maxWidth: '810px' }}>
-        <MonitorDetail monitor={monitor} state={state} probeSummaries={probeSummaries} now={now} maintenances={maintenances} />
+        <MonitorDetail
+          monitor={monitor}
+          state={state}
+          probeSummaries={probeSummaries}
+          now={now}
+          maintenances={maintenances}
+        />
       </div>
     )
   }
@@ -103,14 +112,14 @@ export default function Home({
       </Head>
 
       <main className={inter.className}>
-        <Header page={page} />
+        <Header page={page} style={{ marginBottom: 0 }} />
 
         <div>
           <OverallStatus
-            state={state}
             monitors={monitors}
             maintenances={maintenances}
             aggregate={aggregate}
+            now={now}
             page={page}
           />
           <MonitorList
@@ -150,6 +159,7 @@ export async function getServerSideProps() {
       id: monitor.id,
       name: monitor.name,
       intervalSeconds: getMonitorIntervalSeconds(monitor),
+      ...(monitor.paused && { paused: true }),
       ...(monitor.tooltip !== undefined && { tooltip: monitor.tooltip }),
       ...(monitor.statusPageLink !== undefined && { statusPageLink: monitor.statusPageLink }),
       ...(monitor.hideLatencyChart !== undefined && { hideLatencyChart: monitor.hideLatencyChart }),

@@ -9,6 +9,7 @@ import { handleProbeRequest, cleanupProbeResults } from './probes'
 import { getRuntimeConfig } from './settings'
 import { handleAdminRequest } from './admin'
 import { runCloudflareProbe } from './cloudflare-probe'
+import { MAX_SCHEDULED_TARGETS_PER_CRON } from './limits'
 import { runNotifications } from './notifications'
 
 export interface Env {
@@ -51,8 +52,16 @@ const Worker = {
         .catch(() => undefined)
         .then((value) => value || 'UNKNOWN'))
     await cleanupMonitorSchedules(env, workerConfig.monitors)
-    await runCloudflareProbe(env, workerConfig.monitors, time, getLocation)
-    await runNativeMonitors(env, workerConfig, time, getLocation)
+    const active = workerConfig.monitors.filter(monitor => !monitor.paused)
+    const cloudflareCount = active.filter(monitor => monitor.probes?.includes('cloudflare')).length
+    const nativeCount = active.filter(monitor => !monitor.probes?.length).length
+    const budget = { remaining: MAX_SCHEDULED_TARGETS_PER_CRON }
+    // Reserve a proportional share so a busy Cloudflare scope cannot starve legacy native targets.
+    const cloudflareLimit = nativeCount && cloudflareCount
+      ? Math.max(1, Math.floor(MAX_SCHEDULED_TARGETS_PER_CRON * cloudflareCount / (cloudflareCount + nativeCount)))
+      : MAX_SCHEDULED_TARGETS_PER_CRON
+    await runCloudflareProbe(env, workerConfig.monitors, time, getLocation, undefined, budget, cloudflareLimit)
+    await runNativeMonitors(env, workerConfig, time, getLocation, undefined, budget)
     await runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
       console.error('Notification evaluation failed')
     )

@@ -33,6 +33,8 @@ export type PageConfigLink = {
 }
 
 export type MonitorTarget = {
+  /** Stop new checks and notifications while keeping configuration and history. */
+  paused?: boolean
   /** Internal reference to an administrator-defined webhook template. */
   notificationTemplateId?: string
   notificationGracePeriodSeconds?: number

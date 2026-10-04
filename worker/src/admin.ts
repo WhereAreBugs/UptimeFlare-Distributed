@@ -10,6 +10,8 @@ import type { ProbeEnv } from './probes'
 import { getSettings, type EditableSettings } from './settings'
 import { CLOUDFLARE_PROBE_ID } from './probe-labels'
 import { validatePage, validateMaintenances, validateNotificationDefaults, PresentationInputError } from './presentation'
+import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
+import { pauseTransitionStatements } from './pause'
 
 export interface AdminEnv extends ProbeEnv {
   ADMIN_PASSWORD?: string
@@ -283,6 +285,10 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
         target: monitor.target,
         probes: assigned,
       }
+      if (monitor.paused !== undefined) {
+        if (typeof monitor.paused !== 'boolean') throw new AdminInputError('暂停开关无效')
+        result.paused = monitor.paused
+      }
       if (monitor.notificationTemplateId) {
         if (!templateIds.has(monitor.notificationTemplateId))
           throw new AdminInputError('请选择已存在的通知模板')
@@ -408,7 +414,7 @@ export function validateSettings(value: any, registered: Set<string>): EditableS
       return result
     }
   )
-  if (assignments > 64) throw new AdminInputError('目标与探针分配组合最多 64 个')
+  if (assignments > MAX_MONITOR_PROBE_ASSIGNMENTS) throw new AdminInputError(`目标与探针分配组合最多 ${MAX_MONITOR_PROBE_ASSIGNMENTS} 个`)
   return {
     monitors,
     probes,
@@ -476,17 +482,33 @@ export async function handleAdminRequest(
       return json({ error: '配置版本无效' }, 400)
     const registered = new Set(Object.keys(JSON.parse(env.PROBE_TOKENS ?? '{}')))
     const settings = validateSettings(data, registered)
-    const result = await env.UPTIMEFLARE_D1.prepare(
+    const previous = await getSettings(env, fallback)
+    const priorMonitors = new Map(previous.monitors.map(monitor => [monitor.id, monitor]))
+    const transitions = settings.monitors.flatMap(monitor => {
+      const prior = priorMonitors.get(monitor.id)
+      return !!monitor.paused !== !!prior?.paused
+        ? [{ id: monitor.id, paused: !!monitor.paused, native: !monitor.probes?.length || (!!prior && !prior.probes?.length) }]
+        : []
+    })
+    const now = Math.floor(Date.now() / 1000)
+    // The private nonce gates all transition effects to this successful CAS, including equal-body races.
+    const writeId = crypto.randomUUID()
+    const statement = env.UPTIMEFLARE_D1.prepare(
       'INSERT INTO admin_config (id, revision, value, updated_at) SELECT 1, ?, ?, ? WHERE ? = 0 OR EXISTS (SELECT 1 FROM admin_config WHERE id = 1) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, value = excluded.value, updated_at = excluded.updated_at WHERE admin_config.revision = excluded.revision - 1'
     )
       .bind(
         data.revision + 1,
-        JSON.stringify(settings),
-        Math.floor(Date.now() / 1000),
+        JSON.stringify({ ...settings, _writeId: writeId }),
+        now,
         data.revision
       )
-      .run()
-    if (!result.meta.changes) return json({ error: '配置已被其他窗口修改，请重新加载后保存' }, 409)
+    const guard = `EXISTS (SELECT 1 FROM admin_config WHERE id=1 AND revision=${data.revision + 1} AND json_extract(value,'$._writeId')='${writeId}')`
+    const results = await env.UPTIMEFLARE_D1.batch([
+      statement,
+      ...pauseTransitionStatements(env, transitions, now, guard),
+    ])
+    if (results.some(result => !result.success)) throw new Error('Configuration persistence failed')
+    if (!results[0].meta.changes) return json({ error: '配置已被其他窗口修改，请重新加载后保存' }, 409)
     return json(await getSettings(env, fallback))
   } catch (error) {
     // Never echo D1 errors, SQL, configured targets, passwords or request contents.

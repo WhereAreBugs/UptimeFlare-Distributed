@@ -15,6 +15,7 @@ import {
   claimNativeWriter,
   releaseNativeWriterStatement,
   type ScheduledClaim,
+  type ScheduledBudget,
 } from './scheduling'
 
 /** Native history is a compacted document: serialize its writers and persist only due targets. */
@@ -23,9 +24,10 @@ export async function runNativeMonitors(
   workerConfig: WorkerConfig,
   time: number,
   location: string | (() => Promise<string>),
-  check: typeof doMonitor = doMonitor
+  check: typeof doMonitor = doMonitor,
+  budget?: ScheduledBudget
 ) {
-  const nativeMonitors = workerConfig.monitors.filter((monitor) => !monitor.probes?.length)
+  const nativeMonitors = workerConfig.monitors.filter((monitor) => !monitor.paused && !monitor.probes?.length)
   const now = Math.floor(Date.now() / 1000)
   if (!(await hasDueMonitors(env, 'native', nativeMonitors, time, now))) return
   const writer = await claimNativeWriter(env, time, now)
@@ -33,7 +35,7 @@ export async function runNativeMonitors(
   let writerReleased = false
   let claim: ScheduledClaim | undefined
   try {
-    claim = await claimScheduledMonitors(env, 'native', nativeMonitors, time, now)
+    claim = await claimScheduledMonitors(env, 'native', nativeMonitors, time, now, budget)
     if (!claim.monitors.length) return
     const workerLocation = typeof location === 'string' ? location : await location()
     console.log(`Running scheduled event on ${workerLocation}...`)

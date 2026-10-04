@@ -161,7 +161,7 @@ export function nativeLatencyPoints(
 export function refreshProbeSummary(
   summary: ProbeMonitorSummary,
   now: number,
-  monitor: Pick<MonitorTarget, 'intervalSeconds'> = {}
+  monitor: Pick<MonitorTarget, 'intervalSeconds' | 'paused'> = {}
 ): ProbeMonitorSummary {
   const staleAfterSeconds = getMonitorStaleAfterSeconds(monitor)
   const probes = summary.probes.map((probe) => {
@@ -182,7 +182,10 @@ export function refreshProbeSummary(
     down,
     unknown,
     total: probes.length,
-    status: aggregateStatus(up, down, unknown),
+    status:
+      monitor.paused || summary.paused || summary.status === 'paused'
+        ? 'paused'
+        : aggregateStatus(up, down, unknown),
   }
 }
 
@@ -192,9 +195,11 @@ export function getMonitorStatus(
   summaries: Record<string, ProbeMonitorSummary>,
   now: number
 ): MonitorStatus {
+  if (monitor.paused) return 'unknown'
   if (monitor.probes?.length) {
     const summary = summaries[monitor.id]
-    return summary ? refreshProbeSummary(summary, now, monitor).status : 'unknown'
+    const status = summary ? refreshProbeSummary(summary, now, monitor).status : 'unknown'
+    return status === 'paused' ? 'unknown' : status
   }
   if (!state.latency[monitor.id]?.length || !state.incident[monitor.id]?.length) return 'unknown'
   const latency = state.latency[monitor.id].slice(-1)[0]

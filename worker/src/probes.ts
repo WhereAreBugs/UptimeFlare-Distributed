@@ -16,6 +16,7 @@ import type {
 } from '../../types/probes'
 import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './probe-labels'
 import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-status'
+import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
 
 export interface ProbeEnv {
   UPTIMEFLARE_D1: D1Database
@@ -103,7 +104,7 @@ function authenticate(request: Request, env: ProbeEnv): string {
 function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTarget[] {
   if (
     monitors.length > 100 ||
-    monitors.reduce((total, monitor) => total + (monitor.probes?.length || 0), 0) > 64 ||
+    monitors.reduce((total, monitor) => total + (monitor.probes?.length || 0), 0) > MAX_MONITOR_PROBE_ASSIGNMENTS ||
     new Set(monitors.map((m) => m.id)).size !== monitors.length
   ) {
     throw new ProbeRequestError(503, 'Invalid monitor configuration')
@@ -111,6 +112,7 @@ function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTa
   for (const monitor of monitors) {
     if (
       !ID.test(monitor.id) ||
+      (monitor.paused !== undefined && typeof monitor.paused !== 'boolean') ||
       (monitor.intervalSeconds !== undefined && !Number.isInteger(monitor.intervalSeconds)) ||
       !Number.isInteger(getMonitorIntervalSeconds(monitor)) ||
       getMonitorIntervalSeconds(monitor) < MIN_MONITOR_INTERVAL_SECONDS ||
@@ -485,7 +487,7 @@ export async function handleProbeRequest(
       return json({
         version: 1,
         probe_id: probeId,
-        monitors: assigned.map((monitor) => ({
+        monitors: assigned.filter(monitor => !monitor.paused).map((monitor) => ({
           id: monitor.id,
           method: monitor.method,
           target: monitor.target,
@@ -619,7 +621,7 @@ export async function getProbeSummaries(
   if (
     external.length > 100 ||
     definitions.length > 33 ||
-    external.reduce((total, m) => total + (m.probes?.length || 0), 0) > 64 ||
+    external.reduce((total, m) => total + (m.probes?.length || 0), 0) > MAX_MONITOR_PROBE_ASSIGNMENTS ||
     external.some((m) => (m.probes?.length || 0) > 33)
   ) {
     throw new Error('Probe display configuration exceeds limits')
@@ -773,7 +775,8 @@ export async function getProbeSummaries(
     )
     summaries[monitor.id] = {
       monitorId: monitor.id,
-      status: aggregateStatus(up, down, unknown),
+      paused: !!monitor.paused,
+      status: monitor.paused ? 'paused' : aggregateStatus(up, down, unknown),
       up,
       down,
       unknown,
@@ -829,7 +832,7 @@ export async function getProbeIncidents(
       .probes!.filter((id) => !query.probeId || query.probeId === id)
       .map((probe_id) => ({ probe_id, monitor_id: monitor.id }))
   )
-  if (pairs.length > 64) throw new Error('Probe display configuration exceeds limits')
+  if (pairs.length > MAX_MONITOR_PROBE_ASSIGNMENTS) throw new Error('Probe display configuration exceeds limits')
   if (query.probeId && !pairs.length) throw new Error('Unknown probe assignment')
   let cursor: [number, string, string] = [to, '\uffff', '\uffff']
   if (query.cursor) {

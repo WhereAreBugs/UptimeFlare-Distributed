@@ -97,7 +97,9 @@ export type ProbeSummary = {
 }
 export type ProbeMonitorSummary = {
   monitorId: string
-  status: 'up' | 'degraded' | 'down' | 'unknown'
+  /** Older public responses omit this field; omission means active. */
+  paused?: boolean
+  status: 'up' | 'degraded' | 'down' | 'unknown' | 'paused'
   up: number
   down: number
   unknown: number

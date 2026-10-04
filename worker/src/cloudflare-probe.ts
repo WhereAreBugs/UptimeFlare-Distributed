@@ -1,5 +1,5 @@
 import { DEFAULT_MONITOR_TIMEOUT_MS } from '../../util/monitor-settings'
-import { claimScheduledMonitors, completeScheduledClaim, releaseScheduledClaim } from './scheduling'
+import { claimScheduledMonitors, completeScheduledClaim, releaseScheduledClaim, type ScheduledBudget } from './scheduling'
 import pLimit from 'p-limit'
 import type { MonitorTarget } from '../../types/config'
 import type { ProbeResult } from '../../types/probes'
@@ -15,10 +15,12 @@ export async function runCloudflareProbe(
   monitors: MonitorTarget[],
   time: number,
   location: string | (() => Promise<string>),
-  check: typeof doMonitor = doMonitor
+  check: typeof doMonitor = doMonitor,
+  budget?: ScheduledBudget,
+  scopeLimit?: number
 ) {
   const assigned = monitors
-    .filter((m) => m.probes?.includes(CLOUDFLARE_PROBE_ID))
+    .filter((m) => !m.paused && m.probes?.includes(CLOUDFLARE_PROBE_ID))
     .map((monitor) => ({
       ...monitor,
       timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
@@ -28,7 +30,7 @@ export async function runCloudflareProbe(
     'cloudflare',
     assigned,
     time,
-    Math.floor(Date.now() / 1000)
+    Math.floor(Date.now() / 1000), budget, scopeLimit
   )
   if (!claim.monitors.length) return
   try {
