@@ -34,6 +34,8 @@ export type PublicDashboard = Omit<
   PublicDashboardSnapshot,
   'version' | 'generatedAt' | 'complete'
 > & {
+  materializedAt?: number
+  cachedAt?: number
   snapshotAt: number | null
   snapshotIncomplete: boolean
   stale: boolean

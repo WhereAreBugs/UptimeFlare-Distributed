@@ -1,3 +1,4 @@
+import { usesStateV2 } from './storage-v2'
 import type { MonitorTarget } from '../../types/config'
 import type { NativeIncidentPage, NativeIncidentRow } from '../../types/probes'
 import type { ProbeEnv, ProbeIncidentQuery } from './probes'
@@ -35,7 +36,7 @@ export async function getNativeIncidents(
         !Array.isArray(decoded) ||
         decoded.length !== 2 ||
         !Number.isSafeInteger(decoded[0]) ||
-        decoded[0] < from ||
+        decoded[0] < 0 ||
         decoded[0] >= to ||
         typeof decoded[1] !== 'string' ||
         !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(decoded[1])
@@ -50,6 +51,47 @@ export async function getNativeIncidents(
     (monitor) => !monitor.probes?.length && (!query.monitorId || query.monitorId === monitor.id)
   )
   if (!native.length) return { incidents: [], nextCursor: null, from, to }
+  if (usesStateV2(env)) {
+    const data = await env.UPTIMEFLARE_D1.prepare(
+      `SELECT i.*,h.time latest FROM native_incidents i LEFT JOIN native_hot h USING(monitor_id) WHERE i.monitor_id IN (SELECT value FROM json_each(?)) AND i.start<? AND (i.end IS NULL OR i.end>=?) AND (i.start,i.monitor_id)<(?,?) ORDER BY i.start DESC,i.monitor_id DESC LIMIT ?`
+    )
+      .bind(JSON.stringify(native.map((m) => m.id)), to, from, ...cursor, limit + 1)
+      .all<{ monitor_id: string; start: number; end: number | null; latest: number | null }>()
+    if (!data.success) throw new Error('Incident index read failed')
+    const selected = data.results.slice(0, limit)
+    const pairs = JSON.stringify(selected.map((r) => ({ id: r.monitor_id, start: r.start })))
+    const changes = await env.UPTIMEFLARE_D1.prepare(
+      `SELECT * FROM native_incident_reasons WHERE (monitor_id,incident_start) IN (SELECT json_extract(value,'$.id'),json_extract(value,'$.start') FROM json_each(?)) ORDER BY monitor_id,incident_start,time LIMIT 4000`
+    )
+      .bind(pairs)
+      .all<{ monitor_id: string; incident_start: number; time: number; error: string }>()
+    if (!changes.success) throw new Error('Incident reasons read failed')
+    const incidents = selected.map((row) => ({
+      monitorId: row.monitor_id,
+      monitorName: native.find((m) => m.id === row.monitor_id)!.name,
+      start: Math.max(from, row.start),
+      end: row.end,
+      continued: row.start < from,
+      stale:
+        row.end === null &&
+        (!row.latest ||
+          row.latest <
+            now - getMonitorStaleAfterSeconds(native.find((m) => m.id === row.monitor_id)!)),
+      reasons: changes.results
+        .filter((r) => r.monitor_id === row.monitor_id && r.incident_start === row.start)
+        .map((r) => ({ time: Math.max(from, r.time), ...classifyNativeFailure(r.error) })),
+    }))
+    const last = incidents[incidents.length - 1]
+    return {
+      incidents,
+      nextCursor:
+        data.results.length > limit && last
+          ? btoa(JSON.stringify([selected[selected.length - 1].start, last.monitorId]))
+          : null,
+      from,
+      to,
+    }
+  }
   const state = new CompactedMonitorStateWrapper(await getFromStore(env as any, 'state'))
   const rows: NativeIncidentRow[] = []
   for (const monitor of native) {
@@ -93,7 +135,9 @@ export async function getNativeIncidents(
   return {
     incidents,
     nextCursor:
-      rows.length > limit && last ? btoa(JSON.stringify([last.start, last.monitorId])) : null,
+      rows.length > limit && last
+        ? btoa(JSON.stringify([last.start, last.monitorId]))
+        : null,
     from,
     to,
   }

@@ -1,3 +1,7 @@
+import { getCoordinator } from './coordination-client'
+import { withTimeout } from './util'
+import { usesStateV2 } from './storage-v2'
+import { commitNativeV2, type NativeEffect } from './native-v2'
 import { checkMonitors } from './regional'
 import type { WorkerConfig } from '../../types/config'
 import type { Env } from './index'
@@ -32,6 +36,75 @@ export async function runNativeMonitors(
     (monitor) => !monitor.paused && !monitor.probes?.length
   )
   const now = Math.floor(Date.now() / 1000)
+  if (usesStateV2(env)) {
+    const claim = await claimScheduledMonitors(
+      env,
+      'native',
+      nativeMonitors,
+      time,
+      now,
+      budget,
+      budget?.locations ? 200 : undefined
+    )
+    if (!claim.monitors.length) return
+    try {
+      const checkLocation = typeof location === 'string' ? location : await location()
+      const results = await checkMonitors(claim.monitors, checkLocation, env, check)
+      const measured = {
+        ...claim,
+        monitors: claim.monitors.filter((m) => results.some((r) => r.id === m.id)),
+      }
+      await releaseScheduledClaim(
+        env,
+        claim,
+        measured.monitors.map((m) => m.id)
+      )
+      let effects: NativeEffect[] = []
+      if (env.COORDINATOR_DO) {
+        const coordinator = await getCoordinator(env)
+        const result = await withTimeout(
+          25000,
+          coordinator.commitNative({
+            version: 1,
+            configRevision: (workerConfig as WorkerConfig & { revision?: number }).revision ?? 0,
+            claim: measured,
+            results,
+          })
+        )
+        if (result.version !== 1) throw new Error('Unconfirmed native commit')
+        if (result.committed) effects = result.effects ?? []
+      } else await commitNativeV2(env, workerConfig, measured, results, effects)
+      // Callbacks remain best effort and execute after the state lease, on the root Worker.
+      for (const effect of effects) {
+        const monitor = workerConfig.monitors.find((m) => m.id === effect.id)!
+        try {
+          if (effect.changed)
+            await workerConfig.callbacks?.onStatusChange?.(
+              env,
+              monitor,
+              effect.up,
+              effect.start,
+              effect.time,
+              effect.up ? 'OK' : effect.error
+            )
+          if (!effect.up)
+            await workerConfig.callbacks?.onIncident?.(
+              env,
+              monitor,
+              effect.start,
+              effect.time,
+              effect.error
+            )
+        } catch {
+          console.error('Monitor callback failed')
+        }
+      }
+    } finally {
+      await releaseScheduledClaim(env, claim)
+    }
+    return
+  }
+
   if (!(await hasDueMonitors(env, 'native', nativeMonitors, time, now))) return
   const writer = await claimNativeWriter(env, time, now)
   if (!writer) return

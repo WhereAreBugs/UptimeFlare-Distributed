@@ -519,9 +519,8 @@ it('preserves empty native samples and a genuine zero millisecond measurement wi
     new CompactedMonitorStateWrapper(zero.compactedStateStr).uncompact().latency.host[0].ping
   ).toBe(0)
 })
-it('bounds publication before replacing a usable KV value, releases publisher locks on error, and retains full16KiB footers', async () => {
+it('degrades oversized public metadata without blocking state, releases publisher locks, and retains fitting footers', async () => {
   await seed()
-  const prior = await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)
   const large = {
     ...config,
     revision: 15,
@@ -531,15 +530,15 @@ it('bounds publication before replacing a usable KV value, releases publisher lo
       tooltip: 'x'.repeat(4096),
     })),
   }
-  await expect(publishPublicDashboard(env, large, Math.floor(NOW / 120) * 120)).rejects.toThrow(
-    'exceeds limit'
-  )
-  expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)).toBe(prior)
+  await publishPublicDashboard(env, large, Math.floor(NOW / 120) * 120)
+  const value = (await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY))!
+  expect(new TextEncoder().encode(value).byteLength).toBeLessThanOrEqual(256 * 1024)
+  expect(sanitizePublicSnapshot(JSON.parse(value)).monitors).toHaveLength(100)
   await env.UPTIMEFLARE_D1.prepare('INSERT INTO admin_config VALUES(1,15,?,?)')
     .bind(JSON.stringify(large), NOW)
     .run()
-  await expect(publishPublicConfiguration(env, large, 15)).rejects.toThrow('exceeds limit')
-  expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_CONFIGURATION_KEY)).toBeNull()
+  await publishPublicConfiguration(env, large, 15)
+  expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_CONFIGURATION_KEY)).not.toBeNull()
   expect(
     await env.UPTIMEFLARE_D1.prepare(
       "SELECT value FROM uptimeflare WHERE key='public_config_publisher'"
@@ -549,4 +548,28 @@ it('bounds publication before replacing a usable KV value, releases publisher lo
     buildPublicDashboard({ ...config, page: { customFooter: 'x'.repeat(16384) } }, NOW).page
       .customFooter
   ).toHaveLength(16384)
+})
+
+it('keeps500 targets and1650 multi-probe assignments within the UTF8 public budget without losing lifecycle', async () => {
+  await seed()
+  const large = {
+    ...config,
+    revision: 99,
+    monitors: Array.from({ length: 500 }, (_, i) => ({
+      ...target,
+      id: 'x'.repeat(120) + i,
+      name: '中文'.repeat(128),
+      tooltip: '汉'.repeat(4096),
+      probes: i < 150 ? ['a', 'b', 'c', 'cloudflare'] : ['a', 'b', 'c'],
+      paused: i === 0,
+    })),
+    page: { title: 'Status', group: {} },
+  }
+  await publishPublicDashboard(env, large, Math.floor(NOW / 120) * 120 + 120)
+  const raw = (await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY))!
+  expect(new TextEncoder().encode(raw).byteLength).toBeLessThanOrEqual(256 * 1024)
+  const snapshot = sanitizePublicSnapshot(JSON.parse(raw))
+  expect(snapshot.monitors).toHaveLength(500)
+  expect(snapshot.monitors[0].paused).toBe(true)
+  expect(snapshot.monitors.reduce((n, m) => n + (m.probes?.length ?? 0), 0)).toBe(1650)
 })

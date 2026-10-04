@@ -1,3 +1,10 @@
+import { getCoordinator } from './coordination-client'
+import { withTimeout } from './util'
+import { cleanupStateV2 } from './retention-v2'
+import type { Coordinator } from './coordinator'
+import { usesStateV2 } from './storage-v2'
+import { persistPackedBatch } from './packed-probes'
+import { stableNotificationKey } from './notifications'
 import { publicFailure } from './privacy'
 import {
   DEFAULT_MONITOR_TIMEOUT_MS,
@@ -20,6 +27,8 @@ import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-st
 import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
 
 export interface ProbeEnv {
+  STATE_STORAGE_VERSION?: string
+  COORDINATOR_DO?: DurableObjectNamespace<Coordinator>
   UPTIMEFLARE_D1: D1Database
   /** Public allowlisted snapshots only; never a source of probe or management authorization. */
   UPTIMEFLARE_PUBLIC_KV?: KVNamespace
@@ -106,7 +115,7 @@ function authenticate(request: Request, env: ProbeEnv): string {
 
 function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTarget[] {
   if (
-    monitors.length > 100 ||
+    monitors.length > 500 ||
     monitors.reduce((total, monitor) => total + (monitor.probes?.length || 0), 0) >
       MAX_MONITOR_PROBE_ASSIGNMENTS ||
     new Set(monitors.map((m) => m.id)).size !== monitors.length
@@ -331,8 +340,20 @@ export async function persistBatch(
   probeId: string,
   results: ProbeResult[],
   completionStatements: D1PreparedStatement[] = [],
-  gate?: { scope: string; key: string }
+  gate?: { scope: string; key: string },
+  batchId?: string
 ): Promise<void> {
+  if (usesStateV2(env)) {
+    const runId = 'probe:' + probeId + ':' + (batchId ?? (await stableNotificationKey(results)))
+    if (env.COORDINATOR_DO) {
+      const coordinator = await getCoordinator(env)
+      const result = await withTimeout(25000, coordinator.commitProbe({ version: 1, runId, probeId, results, gate }))
+      if (result.version !== 1 || result.runId !== runId || !result.committed)
+        throw new Error('Unconfirmed coordinated persistence')
+      return
+    }
+    return persistPackedBatch(env, probeId, results, runId, completionStatements, gate)
+  }
   // Normalize absent diagnostics once, so the SQL never persists unvalidated extra JSON fields.
   const payload = JSON.stringify(
     results.map((r) => ({
@@ -542,7 +563,7 @@ export async function handleProbeRequest(
       })
     }
     const batch = validateBatch(await readBatch(request), assigned, Math.floor(Date.now() / 1000))
-    await persistBatch(env, probeId, batch.results)
+    await persistBatch(env, probeId, batch.results, [], undefined, batch.batch_id)
     return json({ batch_id: batch.batch_id, accepted: batch.results.length })
   } catch (error) {
     if (error instanceof ProbeRequestError) return json({ error: error.message }, error.status)
@@ -556,6 +577,7 @@ export async function cleanupProbeResults(
   env: ProbeEnv,
   now = Math.floor(Date.now() / 1000)
 ): Promise<void> {
+  if (usesStateV2(env) && !(await cleanupStateV2(env, now))) return
   const cutoff = now - RETENTION_SECONDS
   const expiredBuckets =
     'SELECT probe_id,monitor_id,time FROM probe_buckets WHERE time<? ORDER BY time,probe_id,monitor_id LIMIT 1000'
@@ -591,7 +613,7 @@ export async function cleanupProbeResults(
         AND NOT EXISTS (SELECT 1 FROM probe_latest l WHERE l.probe_id=d.probe_id AND l.monitor_id=d.monitor_id AND l.time=d.time)
         ORDER BY d.time,d.probe_id,d.monitor_id LIMIT 5000)`
     ).bind(cutoff),
-    env.UPTIMEFLARE_D1.prepare('DELETE FROM probe_days WHERE checks<=0'),
+    env.UPTIMEFLARE_D1.prepare('DELETE FROM probe_days WHERE (probe_id,monitor_id,time) IN (SELECT probe_id,monitor_id,time FROM probe_days WHERE checks<=0 LIMIT 1000)'),
     env.UPTIMEFLARE_D1.prepare(
       `WITH expired AS (${expiredStages}), delta AS (
       SELECT b.probe_id,b.monitor_id,b.stage,SUM(b.failures) failures
@@ -640,12 +662,14 @@ async function readProbeSummaries(
   monitors: MonitorTarget[],
   definitions: ProbeDefinition[] = [],
   now = Math.floor(Date.now() / 1000),
-  dashboard = false
+  dashboard = false,
+  range?: { from: number; to: number }
 ): Promise<Record<string, ProbeMonitorSummary>> {
+  const failuresTable = usesStateV2(env) ? 'probe_failure_events' : 'probe_samples'
   const external = monitors.filter((m) => m.probes?.length && (!dashboard || !m.paused))
   if (!external.length) return {}
   if (
-    external.length > 100 ||
+    external.length > 500 ||
     definitions.length > 33 ||
     external.reduce((total, m) => total + (m.probes?.length || 0), 0) >
       MAX_MONITOR_PROBE_ASSIGNMENTS ||
@@ -673,17 +697,21 @@ async function readProbeSummaries(
     statements.push(
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_buckets WHERE ${scope} AND time>=? AND time<=? ORDER BY time`
-      ).bind(assignments, Math.floor((now - 12 * 60 * 60) / 300) * 300, now),
+      ).bind(
+        assignments,
+        Math.floor((range?.from ?? now - 12 * 60 * 60) / 300) * 300,
+        (range?.to ?? now + 1) - 1
+      ),
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_stage_totals WHERE ${scope} AND failures>0`
       ).bind(assignments),
       // Index-assisted correlated LIMIT avoids ranking every retained failed sample.
       env.UPTIMEFLARE_D1.prepare(
-        `SELECT s.* FROM probe_latest l JOIN probe_samples s ON
+        `SELECT s.* FROM probe_latest l JOIN ${failuresTable} s ON
       s.probe_id=l.probe_id AND s.monitor_id=l.monitor_id AND s.time IN
-      (SELECT f.time FROM probe_samples f WHERE f.probe_id=l.probe_id AND f.monitor_id=l.monitor_id
-        AND f.up=0 AND f.time>=? ORDER BY f.time DESC LIMIT 100)
-      WHERE ${latestScope} AND s.up=0 ORDER BY s.time DESC`
+      (SELECT f.time FROM ${failuresTable} f WHERE f.probe_id=l.probe_id AND f.monitor_id=l.monitor_id
+        AND ${usesStateV2(env) ? '1' : 'f.up=0'} AND f.time>=? ORDER BY f.time DESC LIMIT 100)
+      WHERE ${latestScope} AND ${usesStateV2(env) ? '1' : 's.up=0'} ORDER BY s.time DESC`
       ).bind(now - RETENTION_SECONDS, assignments),
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_days WHERE ${scope} AND time>=? AND time<=? AND checks>0 ORDER BY time`
@@ -794,7 +822,9 @@ async function readProbeSummaries(
             : 'Waiting for the first probe result'
           : dashboard
           ? undefined
-          : latest?.message || undefined,
+          : latest?.message
+          ? publicFailure(latest.stage, latest.code, latest.message).message
+          : undefined,
         checks: totals?.checks ?? 0,
         failures: totals?.failures ?? 0,
         avgLatencyMs: latencyChecks ? latencySum / latencyChecks : null,
@@ -844,9 +874,10 @@ export function getProbeSummaries(
   env: ProbeEnv,
   monitors: MonitorTarget[],
   definitions: ProbeDefinition[] = [],
-  now = Math.floor(Date.now() / 1000)
+  now = Math.floor(Date.now() / 1000),
+  range?: { from: number; to: number }
 ): Promise<Record<string, ProbeMonitorSummary>> {
-  return readProbeSummaries(env, monitors, definitions, now)
+  return readProbeSummaries(env, monitors, definitions, now, false, range)
 }
 
 /** Dashboard reads two bounded tables and never scans historical rows or paused assignments. */
@@ -878,6 +909,7 @@ export async function getProbeIncidents(
   query: ProbeIncidentQuery = {},
   now = Math.floor(Date.now() / 1000)
 ): Promise<ProbeIncidentPage> {
+  const failuresTable = usesStateV2(env) ? 'probe_failure_events' : 'probe_samples'
   const from = Math.max(now - RETENTION_SECONDS, query.from ?? now - RETENTION_SECONDS)
   const to = Math.min(now + 1, query.to ?? now + 1)
   const limit = query.limit ?? 100
@@ -929,11 +961,15 @@ export async function getProbeIncidents(
   const data = await env.UPTIMEFLARE_D1.prepare(
     `WITH assigned AS (
       SELECT json_extract(value,'$.probe_id') probe_id,json_extract(value,'$.monitor_id') monitor_id FROM json_each(?)
-    ) SELECT s.* FROM assigned a JOIN probe_samples s ON s.probe_id=a.probe_id AND s.monitor_id=a.monitor_id
-      AND s.time IN (SELECT f.time FROM probe_samples f
-        WHERE f.probe_id=a.probe_id AND f.monitor_id=a.monitor_id AND f.up=0 AND f.time>=? AND f.time<?
+    ) SELECT s.* FROM assigned a JOIN ${failuresTable} s ON s.probe_id=a.probe_id AND s.monitor_id=a.monitor_id
+      AND s.time IN (SELECT f.time FROM ${failuresTable} f
+        WHERE f.probe_id=a.probe_id AND f.monitor_id=a.monitor_id AND ${
+          usesStateV2(env) ? '1' : 'f.up=0'
+        } AND f.time>=? AND f.time<?
           AND (f.time,f.monitor_id,f.probe_id)<(?,?,?) ORDER BY f.time DESC LIMIT ?)
-      WHERE s.up=0 ORDER BY s.time DESC,s.monitor_id DESC,s.probe_id DESC LIMIT ?`
+      WHERE ${
+        usesStateV2(env) ? '1' : 's.up=0'
+      } ORDER BY s.time DESC,s.monitor_id DESC,s.probe_id DESC LIMIT ?`
   )
     .bind(JSON.stringify(pairs), from, to, ...cursor, limit + 1, limit + 1)
     .all<Latest>()

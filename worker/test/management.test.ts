@@ -150,6 +150,7 @@ beforeEach(async () => {
       'notification_observations',
       'notification_state',
       'notification_outbox',
+      'notification_deliveries',
       'monitor_schedule',
       'probe_latest',
       'uptimeflare',
@@ -519,6 +520,7 @@ describe('scoped management tokens with actual D1', () => {
         [
           'notification_state',
           'notification_outbox',
+          'notification_deliveries',
           'notification_observations',
           'monitor_schedule',
         ].map((table) =>

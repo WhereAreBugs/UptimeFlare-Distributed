@@ -62,6 +62,7 @@ beforeEach(async () => {
     'uptimeflare',
     'notification_state',
     'notification_outbox',
+    'notification_deliveries',
     'probe_samples',
     'probe_latest',
     'probe_buckets',

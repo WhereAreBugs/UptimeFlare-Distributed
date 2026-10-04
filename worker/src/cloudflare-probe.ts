@@ -81,6 +81,7 @@ export async function runCloudflareProbe(
       { ...claim, key: claim.key, monitors: [] },
       results.map((r) => r.monitor_id)
     )
+    if (!results.length) return
     await persistBatch(
       env,
       CLOUDFLARE_PROBE_ID,

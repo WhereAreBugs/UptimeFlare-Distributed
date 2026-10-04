@@ -1,7 +1,7 @@
 import { DEFAULT_MONITOR_TIMEOUT_MS } from '../../util/monitor-settings'
 import { Env } from '.'
 import { MonitorTarget } from '../../types/config'
-import { withTimeout, fetchTimeout } from './util'
+import { withTimeout, fetchTimeout, readResponseBody as readBoundedBody } from './util'
 import {
   classifyNativeFailure,
   formatNativeDiagnostic,
@@ -9,43 +9,16 @@ import {
   type NativeCheckStatus,
 } from './diagnostics'
 
-/** Bound keyword responses and include body reads in the configured check deadline. */
-async function readBoundedBody(response: Response, deadline: number): Promise<string> {
-  if (!response.body) return ''
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  const chunks: string[] = []
-  let bytes = 0
-  try {
-    while (true) {
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) throw new Error('[body/timeout] HTTP response body timed out')
-      let part: ReadableStreamReadResult<Uint8Array>
-      try {
-        part = await withTimeout(remaining, reader.read())
-      } catch (error) {
-        if (Date.now() >= deadline || classifyNativeFailure(error).code === 'timeout')
-          throw new Error('[body/timeout] HTTP response body timed out')
-        throw error
-      }
-      if (part.done) break
-      bytes += part.value.byteLength
-      if (bytes > 1024 * 1024) throw new Error('[body/too_large] HTTP response body exceeds 1 MiB')
-      chunks.push(decoder.decode(part.value, { stream: true }))
-    }
-    chunks.push(decoder.decode())
-    return chunks.join('')
-  } finally {
-    await reader.cancel().catch(() => {})
-    reader.releaseLock()
-  }
-}
-
 async function readProxyJSON(response: Response, deadline: number) {
-  try { return JSON.parse(await readBoundedBody(response, deadline)) }
-  catch (error) {
+  try {
+    return JSON.parse(await readBoundedBody(response, deadline))
+  } catch (error) {
     const timeout = Date.now() >= deadline || classifyNativeFailure(error).code === 'timeout'
-    throw new Error(timeout ? '[proxy/timeout] Check proxy response timed out' : '[proxy/invalid_response] Invalid check proxy response')
+    throw new Error(
+      timeout
+        ? '[proxy/timeout] Check proxy response timed out'
+        : '[proxy/invalid_response] Invalid check proxy response'
+    )
   }
 }
 
@@ -133,7 +106,10 @@ export async function getStatusWithGlobalPing(
     let globalPingRequest = {}
 
     if (monitor.method === 'TCP_PING' || monitor.method === 'ICMP_PING') {
-      const targetUrl = monitor.method === 'TCP_PING' ? parseNativeTcpTarget(monitor.target) : { hostname: monitor.target, port: undefined }
+      const targetUrl =
+        monitor.method === 'TCP_PING'
+          ? parseNativeTcpTarget(monitor.target)
+          : { hostname: monitor.target, port: undefined }
       const ipVersionOption = getDomainOnlyIpVersionOption(targetUrl.hostname, gpUrl)
       globalPingRequest = {
         type: 'ping',
@@ -205,30 +181,42 @@ export async function getStatusWithGlobalPing(
       },
       body: JSON.stringify(globalPingRequest),
     })
-    const measurementResponse = (await measurement.json()) as any
+    const measurementResponse = await readProxyJSON(
+      measurement,
+      startTime + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS) + 2000
+    )
 
     if (measurement.status !== 202) {
       throw measurementResponse.error.message
     }
 
     const measurementId = measurementResponse.id
+    if (typeof measurementId !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(measurementId))
+      throw new Error('[proxy/invalid_response] Invalid measurement identity')
     console.log(
       `Measurement created successfully, id: ${measurementId}, time elapsed: ${
         Date.now() - startTime
       }ms`
     )
 
-    const pollStart = Date.now()
+    const pollStart = startTime
     let measurementResult: any
+    let polls = 0
     while (true) {
+      if (++polls > 19) throw 'api polling budget exceeded'
       if (Date.now() - pollStart > (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS) + 2000) {
         // 2s extra buffer
         throw 'api polling timeout'
       }
 
-      measurementResult = (await (
-        await fetchTimeout(`https://api.globalping.io/v1/measurements/${measurementId}`, 5000)
-      ).json()) as any
+      const deadline = pollStart + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS) + 2000
+      measurementResult = await readProxyJSON(
+        await fetchTimeout(
+          `https://api.globalping.io/v1/measurements/${measurementId}`,
+          Math.max(1, Math.min(5000, deadline - Date.now()))
+        ),
+        deadline
+      )
       if (measurementResult.status !== 'in-progress') {
         break
       }
@@ -257,7 +245,8 @@ export async function getStatusWithGlobalPing(
     if (monitor.method === 'TCP_PING' || monitor.method === 'ICMP_PING') {
       const stats = measurementResult.results[0].result.stats
       const time = Number.isFinite(stats?.avg) && stats.avg >= 0 ? Math.round(stats.avg) : 0
-      const reachable = Number.isFinite(stats?.rcv) && stats.rcv > 0 && Number.isFinite(stats.avg) && stats.avg >= 0
+      const reachable =
+        Number.isFinite(stats?.rcv) && stats.rcv > 0 && Number.isFinite(stats.avg) && stats.avg >= 0
       const stage = monitor.method === 'ICMP_PING' ? 'icmp' : 'tcp'
       return {
         location: country + '/' + city,
@@ -320,22 +309,78 @@ export async function getStatus(monitor: MonitorTarget): Promise<NativeCheckStat
 
   const startTime = Date.now()
 
-  if (monitor.method === 'SSL_CERT') return { ping: 0, up: false, err: '[configuration/invalid_request] Certificate expiry checks require a Go probe or HTTP check proxy' }
+  if (monitor.method === 'SSL_CERT')
+    return {
+      ping: 0,
+      up: false,
+      err: '[configuration/invalid_request] Certificate expiry checks require a Go probe or HTTP check proxy',
+    }
   if (monitor.method === 'ICMP_PING') {
-    if (!monitor.icmpProxyURL) return { ping: 0, up: false, err: '[configuration/invalid_request] ICMP checks require a configured proxy in Workers' }
+    if (!monitor.icmpProxyURL)
+      return {
+        ping: 0,
+        up: false,
+        err: '[configuration/invalid_request] ICMP checks require a configured proxy in Workers',
+      }
     try {
-      const response = await fetchTimeout(monitor.icmpProxyURL, monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS, {
-        method: 'POST', headers: { ...(monitor.headers as Record<string,string>), ...monitor.checkProxyHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: monitor.target, timeout_ms: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS }), redirect: 'manual',
-      })
-      if (!response.ok) { await response.body?.cancel(); throw new Error('[proxy/status] Proxy returned an unsuccessful HTTP status') }
-      const result = await readProxyJSON(response, startTime + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS))
-      if (typeof result.up !== 'boolean' || !Number.isFinite(result.latency_ms) || result.latency_ms < 0 || result.latency_ms > 300000 || (result.icmp_latency_ms !== undefined && (!Number.isFinite(result.icmp_latency_ms) || result.icmp_latency_ms < 0 || result.icmp_latency_ms > 300000))) throw new Error('[proxy/invalid_response] Invalid ICMP proxy response')
-      const err = result.up ? '' : formatNativeDiagnostic(classifyNativeFailure(`[${result.stage ?? 'icmp'}/${result.code ?? 'unknown'}] ICMP check failed`))
-      return { ping: Date.now()-startTime, up: result.up, err, icmp_latency_ms: result.icmp_latency_ms ?? result.latency_ms }
+      const response = await fetchTimeout(
+        monitor.icmpProxyURL,
+        monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+        {
+          method: 'POST',
+          headers: {
+            ...(monitor.headers as Record<string, string>),
+            ...monitor.checkProxyHeaders,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            target: monitor.target,
+            timeout_ms: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+          }),
+          redirect: 'manual',
+        }
+      )
+      if (!response.ok) {
+        await response.body?.cancel()
+        throw new Error('[proxy/status] Proxy returned an unsuccessful HTTP status')
+      }
+      const result = await readProxyJSON(
+        response,
+        startTime + (monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)
+      )
+      if (
+        typeof result.up !== 'boolean' ||
+        !Number.isFinite(result.latency_ms) ||
+        result.latency_ms < 0 ||
+        result.latency_ms > 300000 ||
+        (result.icmp_latency_ms !== undefined &&
+          (!Number.isFinite(result.icmp_latency_ms) ||
+            result.icmp_latency_ms < 0 ||
+            result.icmp_latency_ms > 300000))
+      )
+        throw new Error('[proxy/invalid_response] Invalid ICMP proxy response')
+      const err = result.up
+        ? ''
+        : formatNativeDiagnostic(
+            classifyNativeFailure(
+              `[${result.stage ?? 'icmp'}/${result.code ?? 'unknown'}] ICMP check failed`
+            )
+          )
+      return {
+        ping: Date.now() - startTime,
+        up: result.up,
+        err,
+        icmp_latency_ms: result.icmp_latency_ms ?? result.latency_ms,
+      }
     } catch (error) {
       const diagnostic = classifyNativeFailure(error, 'proxy')
-      return { ping: Date.now()-startTime, up: false, err: formatNativeDiagnostic(diagnostic), stage: diagnostic.stage, code: diagnostic.code }
+      return {
+        ping: Date.now() - startTime,
+        up: false,
+        err: formatNativeDiagnostic(diagnostic),
+        stage: diagnostic.stage,
+        code: diagnostic.code,
+      }
     }
   }
 
@@ -460,11 +505,20 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
           {
             method: 'POST',
             headers: { ...monitor.checkProxyHeaders, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...monitor, checkProxy: undefined, checkProxyFallback: undefined, checkProxyHeaders: undefined, icmpProxyURL: undefined }),
+            body: JSON.stringify({
+              ...monitor,
+              checkProxy: undefined,
+              checkProxyFallback: undefined,
+              checkProxyHeaders: undefined,
+              icmpProxyURL: undefined,
+            }),
             redirect: 'manual',
           }
         )
-        if (!response.ok) { await response.body?.cancel(); throw new Error('[proxy/status] Check proxy returned an unsuccessful HTTP response') }
+        if (!response.ok) {
+          await response.body?.cancel()
+          throw new Error('[proxy/status] Check proxy returned an unsuccessful HTTP response')
+        }
         resp = await readProxyJSON(response, deadline)
       }
       if (
@@ -472,10 +526,19 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
         typeof resp.location !== 'string' ||
         typeof resp.status?.up !== 'boolean' ||
         typeof resp.status.err !== 'string' ||
-        !Number.isFinite(resp.status.ping) || resp.status.ping < 0 || resp.status.ping > 300000 ||
-        (resp.status.certificate_expires_at !== undefined && (!Number.isSafeInteger(resp.status.certificate_expires_at) || resp.status.certificate_expires_at < 0 || resp.status.certificate_expires_at > 253402300799)) ||
-        (resp.status.certificate_days_remaining !== undefined && !Number.isFinite(resp.status.certificate_days_remaining)) ||
-        (resp.status.icmp_latency_ms !== undefined && (!Number.isFinite(resp.status.icmp_latency_ms) || resp.status.icmp_latency_ms < 0 || resp.status.icmp_latency_ms > 300000))
+        !Number.isFinite(resp.status.ping) ||
+        resp.status.ping < 0 ||
+        resp.status.ping > 300000 ||
+        (resp.status.certificate_expires_at !== undefined &&
+          (!Number.isSafeInteger(resp.status.certificate_expires_at) ||
+            resp.status.certificate_expires_at < 0 ||
+            resp.status.certificate_expires_at > 253402300799)) ||
+        (resp.status.certificate_days_remaining !== undefined &&
+          !Number.isFinite(resp.status.certificate_days_remaining)) ||
+        (resp.status.icmp_latency_ms !== undefined &&
+          (!Number.isFinite(resp.status.icmp_latency_ms) ||
+            resp.status.icmp_latency_ms < 0 ||
+            resp.status.icmp_latency_ms > 300000))
       )
         throw new Error('[proxy/invalid_response] Invalid check proxy response')
       checkLocation = resp.location
@@ -501,7 +564,9 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
 
   if (!status.up) {
     const diagnostic = classifyNativeFailure(
-      typeof status.stage === 'string' && typeof status.code === 'string' ? `[${status.stage}/${status.code}] ${status.err}` : status.err,
+      typeof status.stage === 'string' && typeof status.code === 'string'
+        ? `[${status.stage}/${status.code}] ${status.err}`
+        : status.err,
       monitor.method === 'TCP_PING' ? 'tcp' : 'http'
     )
     status = {

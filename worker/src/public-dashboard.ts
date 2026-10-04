@@ -1,3 +1,4 @@
+import { encodePublicWire, decodePublicWire, utf8Prefix } from '../../util/public-wire'
 import type {
   MaintenanceConfig,
   MonitorStateCompacted,
@@ -40,7 +41,7 @@ const number = (value: unknown): number | null =>
 
 /** Allowlisting is applied on both publication and consumption, including manually seeded snapshots. */
 export function publicMonitors(source: unknown): PublicMonitor[] {
-  if (!Array.isArray(source) || source.length > 100) throw new Error('Invalid public monitor list')
+  if (!Array.isArray(source) || source.length > 500) throw new Error('Invalid public monitor list')
   const ids = new Set<string>()
   return source.map((raw) => {
     const value = record(raw),
@@ -104,7 +105,7 @@ function publicPage(source: unknown, ids: Set<string>): PageConfig {
         .map(([name, members]) => [
           name.slice(0, 200),
           Array.isArray(members)
-            ? members.filter((id) => typeof id === 'string' && ids.has(id)).slice(0, 100)
+            ? members.filter((id) => typeof id === 'string' && ids.has(id)).slice(0, 500)
             : [],
         ])
     )
@@ -114,7 +115,7 @@ function publicPage(source: unknown, ids: Set<string>): PageConfig {
 }
 function publicMaintenances(source: unknown, ids: Set<string>): MaintenanceConfig[] {
   if (!Array.isArray(source)) return []
-  return source.slice(0, 100).flatMap((raw) => {
+  return source.slice(0, 500).flatMap((raw) => {
     const value = record(raw)
     if (typeof value.body !== 'string' || !['string', 'number'].includes(typeof value.start))
       return []
@@ -136,7 +137,7 @@ function publicMaintenances(source: unknown, ids: Set<string>): MaintenanceConfi
         ...(Array.isArray(value.monitors) && {
           monitors: value.monitors
             .filter((id: unknown) => typeof id === 'string' && ids.has(id))
-            .slice(0, 100),
+            .slice(0, 500),
         }),
         ...(['daily', 'weekly', 'monthly'].includes(repeat.frequency) &&
           typeof repeat.timeZone === 'string' && {
@@ -265,7 +266,7 @@ function nativeState(raw: unknown, monitors: MonitorTarget[]): string | null {
   })
 }
 export function sanitizePublicSnapshot(raw: unknown): PublicDashboardSnapshot {
-  const value = record(raw)
+  const value = record(decodePublicWire(raw))
   if (
     value.version !== 1 ||
     !Number.isInteger(value.configRevision) ||
@@ -384,12 +385,40 @@ function parseSnapshot(raw: string | null): PublicDashboardSnapshot | null {
     throw new Error('Public snapshot exceeds limit')
   return sanitizePublicSnapshot(JSON.parse(raw))
 }
-function serializeSnapshot(snapshot: PublicDashboardSnapshot): string {
-  const serialized = JSON.stringify(snapshot)
-  if (new TextEncoder().encode(serialized).byteLength > MAX_SNAPSHOT_BYTES)
-    throw new Error('Public snapshot exceeds limit')
+export function serializeSnapshot(snapshot: PublicDashboardSnapshot): string {
+  let serialized = JSON.stringify(encodePublicWire(snapshot))
+  if (new TextEncoder().encode(serialized).byteLength <= MAX_SNAPSHOT_BYTES - 1024)
+    return serialized
+  // Public projection degradation never truncates or deletes original measurements.
+  const bounded = {
+    ...snapshot,
+    page: { ...snapshot.page, customFooter: undefined, links: undefined },
+    maintenances: snapshot.maintenances.map((m) => ({
+      ...m,
+      body: '',
+      title: m.title && utf8Prefix(m.title, 64),
+    })),
+    monitors: snapshot.monitors.map((m) => ({
+      ...m,
+      name: utf8Prefix(m.name, 64),
+      tooltip: undefined,
+      statusPageLink: undefined,
+    })),
+  }
+  serialized = JSON.stringify(encodePublicWire(bounded))
+  if (new TextEncoder().encode(serialized).byteLength > MAX_SNAPSHOT_BYTES - 1024) {
+    const wire = encodePublicWire(bounded)
+    wire.labels = wire.labels.map((label: any) => [label[0], utf8Prefix(label[1], 64), null])
+    wire.summaries = wire.summaries.map((entry: any) =>
+      entry ? [entry[0].map((probe: any[]) => probe.slice(0, 5)), null] : null
+    )
+    serialized = JSON.stringify(wire)
+  }
+  if (new TextEncoder().encode(serialized).byteLength > MAX_SNAPSHOT_BYTES - 1024)
+    throw new Error('Public snapshot exceeds current-summary budget')
   return serialized
 }
+
 function isD1ReadQuotaError(error: unknown): boolean {
   let value = error
   for (let depth = 0; value && depth < 5; depth++) {
@@ -573,7 +602,11 @@ export async function publishPublicConfiguration(
       Math.floor(Date.now() / 1000)
     )
     await kv.put(PUBLIC_CONFIGURATION_KEY, serializeSnapshot(snapshot))
-    await (globalThis as any).caches?.default?.delete(CACHE_URL).catch(() => undefined)
+    await Promise.all(
+      [CACHE_URL, CACHE_URL + '/wire-v2'].map(
+        (url) => (globalThis as any).caches?.default?.delete(url).catch(() => undefined)
+      )
+    )
   } finally {
     await env.UPTIMEFLARE_D1.prepare(
       "DELETE FROM uptimeflare WHERE key='public_config_publisher' AND value=?"
@@ -581,4 +614,51 @@ export async function publishPublicConfiguration(
       .bind(nonce)
       .run()
   }
+}
+
+/** Static clients read an already materialized public projection; one minute cache and no D1. */
+export async function publicStateResponse(
+  env: PublicDashboardEnv,
+  fallback: WorkerConfig
+): Promise<Response> {
+  const cache = (globalThis as any).caches?.default as Cache | undefined,
+    url = CACHE_URL + '/wire-v2'
+  const cached = await cache?.match(url).catch(() => undefined)
+  if (cached)
+    return new Response(cached.body, {
+      headers: { ...Object.fromEntries(cached.headers), 'Cache-Control': 'no-store' },
+    })
+  const dashboard = await getPublicDashboard(env, fallback),
+    now = Math.floor(Date.now() / 1000)
+  const snapshot: PublicDashboardSnapshot = {
+    version: 1,
+    generatedAt: dashboard.snapshotAt ?? now,
+    configRevision: dashboard.configRevision,
+    complete: !dashboard.snapshotIncomplete,
+    monitors: dashboard.monitors,
+    page: dashboard.page,
+    maintenances: dashboard.maintenances,
+    probeSummaries: dashboard.probeSummaries,
+    compactedStateStr: dashboard.compactedStateStr,
+  }
+  const body = JSON.stringify({
+    ...JSON.parse(serializeSnapshot(snapshot)),
+    source: dashboard.source,
+    snapshotAt: dashboard.snapshotAt,
+    stale: dashboard.stale,
+    snapshotIncomplete: dashboard.snapshotIncomplete,
+    materializedAt: snapshot.generatedAt,
+    cachedAt: now,
+  })
+  const response = new Response(body, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public,max-age=60',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  })
+  await cache?.put(url, response.clone()).catch(() => undefined)
+  return new Response(body, {
+    headers: { ...Object.fromEntries(response.headers), 'Cache-Control': 'no-store' },
+  })
 }

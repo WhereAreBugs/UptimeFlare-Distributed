@@ -1,3 +1,5 @@
+import { usesStateV2, publicNativeV2, nativeHot } from './storage-v2'
+import type { ProbeEnv } from './probes'
 import { classifyNativeFailure, formatNativeDiagnostic } from './diagnostics'
 import type { Env } from '.'
 import {
@@ -8,20 +10,20 @@ import {
   MonitorTarget,
 } from '../../types/config'
 
-export async function getFromStore(
-  env: Pick<Env, 'UPTIMEFLARE_D1'>,
-  key: string
-): Promise<string | null> {
+export async function getFromStore(env: ProbeEnv, key: string): Promise<string | null> {
+  if (key === 'state' && usesStateV2(env)) {
+    const rows = await nativeHot(env)
+    return publicNativeV2(
+      env,
+      rows.map((r) => ({ id: r.monitor_id, name: '', target: '', method: '' }))
+    )
+  }
   const stmt = env.UPTIMEFLARE_D1.prepare('SELECT value FROM uptimeflare WHERE key = ?')
   const result = await stmt.bind(key).first<{ value: string }>()
   return result?.value || null
 }
 
-export async function setToStore(
-  env: Pick<Env, 'UPTIMEFLARE_D1'>,
-  key: string,
-  value: string
-): Promise<void> {
+export async function setToStore(env: ProbeEnv, key: string, value: string): Promise<void> {
   const stmt = env.UPTIMEFLARE_D1.prepare(
     'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;'
   )
@@ -30,10 +32,13 @@ export async function setToStore(
 
 /** Scope native state before public serialization, optionally keeping only the latest observation. */
 export async function getPublicNativeState(
-  env: Pick<Env, 'UPTIMEFLARE_D1'>,
+  env: ProbeEnv,
   monitors: MonitorTarget[],
-  history = false
+  history = false,
+  from?: number,
+  to?: number
 ): Promise<string | null> {
+  if (usesStateV2(env)) return publicNativeV2(env, monitors, history, from, to)
   const ids = new Set(
     monitors
       .filter((monitor) => !monitor.paused && !monitor.probes?.length)
@@ -76,6 +81,18 @@ export async function getPublicNativeState(
             ping: latency.ping.slice(-4),
             loc: { v: latency.loc.v.slice(-1), c: latency.time.length ? [1] : [] },
           }
+  }
+  if (history && (from !== undefined || to !== undefined)) {
+    const wrapper = new CompactedMonitorStateWrapper(JSON.stringify(state))
+    const expanded = wrapper.uncompact()
+    for (const id of Array.from(ids)) {
+      const samples = (expanded.latency[id] ?? []).filter(
+        (sample) => sample.time >= (from ?? 0) && sample.time < (to ?? Infinity)
+      )
+      delete wrapper.data.latency[id]
+      for (const sample of samples) wrapper.appendLatency(id, sample)
+    }
+    return wrapper.getCompactedStateStr()
   }
   return JSON.stringify(state)
 }

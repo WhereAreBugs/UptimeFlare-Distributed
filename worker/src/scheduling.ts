@@ -1,3 +1,4 @@
+import { admitByLocation } from './execution-budget'
 import type { MonitorTarget } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { MAX_SCHEDULED_TARGETS_PER_CRON } from './limits'
@@ -10,7 +11,7 @@ import {
 } from '../../util/monitor-settings'
 
 export type ScheduledClaim = { monitors: MonitorTarget[]; scope: string; key: string; time: number }
-export type ScheduledBudget = { remaining: number }
+export type ScheduledBudget = { remaining: number; locations?: Map<string, number> }
 type ScheduleRow = {
   monitor_id: string
   configuration_key: string
@@ -103,14 +104,44 @@ export async function claimScheduledMonitors(
   const key = crypto.randomUUID()
   monitors = monitors.filter((monitor) => !monitor.paused)
   if (!monitors.length) return { monitors: [], scope, key, time }
+  if (budget?.locations) {
+    const values = await scheduleInputs(monitors)
+    const data = await env.UPTIMEFLARE_D1.prepare(
+      'SELECT monitor_id,configuration_key,last_started_at,last_completed_at,lease_until FROM monitor_schedule WHERE scope=?'
+    )
+      .bind(scope)
+      .all<ScheduleRow>()
+    if (!data.success) throw new Error('Schedule admission read failed')
+    const prior = new Map(data.results.map((row) => [row.monitor_id, row])),
+      fingerprints = new Map(values.map((v) => [v.id, v]))
+    monitors = monitors
+      .filter((m) => {
+        const row = prior.get(m.id),
+          input = fingerprints.get(m.id)!
+        return (
+          !row ||
+          (row.last_started_at < time &&
+            row.lease_until <= now &&
+            (row.configuration_key !== input.fingerprint ||
+              !row.last_completed_at ||
+              row.last_completed_at + input.interval <= time))
+        )
+      })
+      .sort(
+        (a, b) =>
+          (prior.get(a.id)?.last_completed_at ?? 0) - (prior.get(b.id)?.last_completed_at ?? 0)
+      )
+    monitors = admitByLocation(monitors, budget)
+  }
   const inputs = await scheduleInputs(monitors)
+  if (!inputs.length) return { monitors: [], scope, key, time }
   // Reserve a minute for persistence; a preceding native/Cloudflare batch shares the same Cron lifetime.
   const timeoutSeconds = Math.ceil(
     Math.max(...monitors.map((m) => m.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS)) / 1000
   )
   const budgetSeconds = Math.max(0, 840 - Math.max(0, now - time))
   const batchLimit = Math.min(
-    MAX_SCHEDULED_TARGETS_PER_CRON,
+    budget?.locations ? 200 : MAX_SCHEDULED_TARGETS_PER_CRON,
     scopeLimit,
     budget?.remaining ?? MAX_SCHEDULED_TARGETS_PER_CRON,
     Math.floor(budgetSeconds / timeoutSeconds) * 5

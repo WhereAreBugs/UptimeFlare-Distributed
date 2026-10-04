@@ -50,7 +50,9 @@ let env: ProbeEnv
 let receiver: Server
 beforeAll(async () => {
   const Bytes = Uint8Array as any
-  Bytes.prototype.toHex ??= function () { return Buffer.from(this).toString('hex') }
+  Bytes.prototype.toHex ??= function () {
+    return Buffer.from(this).toString('hex')
+  }
   Bytes.fromHex ??= (value: string) => Uint8Array.from(Buffer.from(value, 'hex'))
   mf = new Miniflare({
     modules: true,
@@ -67,6 +69,7 @@ beforeEach(async () => {
   for (const table of [
     'uptimeflare',
     'notification_outbox',
+    'notification_deliveries',
     'notification_state',
     'notification_observations',
     'probe_latest',
@@ -105,87 +108,151 @@ async function queued() {
 }
 
 it('uses durable source webhooks with 5-minute checks, target grace and recovery gating', async () => {
-  const send=sender()
+  const send = sender()
   const source: WorkerConfig = {
-    monitors:[{id:'native',name:'Native',target:'https://example.test',intervalSeconds:300,notificationGracePeriodSeconds:60}],
-    notification:{gracePeriod:20,webhook:[config.notificationTemplates![0].webhook,{...config.notificationTemplates![0].webhook,url:'https://second.test/hook'}]},
-    maintenances:[],
+    monitors: [
+      {
+        id: 'native',
+        name: 'Native',
+        target: 'https://example.test',
+        intervalSeconds: 300,
+        notificationGracePeriodSeconds: 60,
+      },
+    ],
+    notification: {
+      gracePeriod: 20,
+      webhook: [
+        config.notificationTemplates![0].webhook,
+        { ...config.notificationTemplates![0].webhook, url: 'https://second.test/hook' },
+      ],
+    },
+    maintenances: [],
   }
-  async function sample(time:number,up:boolean) {
-    const state=new CompactedMonitorStateWrapper(null)
-    state.appendIncident('native',{start:[NOW],end:up?time:null,error:['[tcp/refused] Connection refused']})
-    state.appendLatency('native',{time,ping:1,loc:'SIN'})
-    await setToStore(env,'state',state.getCompactedStateStr())
+  async function sample(time: number, up: boolean) {
+    const state = new CompactedMonitorStateWrapper(null)
+    state.appendIncident('native', {
+      start: [NOW],
+      end: up ? time : null,
+      error: ['[tcp/refused] Connection refused'],
+    })
+    state.appendLatency('native', { time, ping: 1, loc: 'SIN' })
+    await setToStore(env, 'state', state.getCompactedStateStr())
   }
-  await sample(NOW,false); await runNotifications(env,source,NOW+1,send)
-  await runNotifications(env,source,NOW+70,send)
+  await sample(NOW, false)
+  await runNotifications(env, source, NOW + 1, send)
+  await runNotifications(env, source, NOW + 70, send)
   expect(send).not.toHaveBeenCalled()
-  await sample(NOW+300,false); await runNotifications(env,source,NOW+301,send)
+  await sample(NOW + 300, false)
+  await runNotifications(env, source, NOW + 301, send)
   expect(send).toHaveBeenCalledTimes(2)
-  await runNotifications(env,source,NOW+360,send)
+  await runNotifications(env, source, NOW + 360, send)
   expect(send).toHaveBeenCalledTimes(2)
-  await sample(NOW+600,true); await runNotifications(env,source,NOW+601,send)
+  await sample(NOW + 600, true)
+  await runNotifications(env, source, NOW + 601, send)
   expect(send).toHaveBeenCalledTimes(4)
   expect(JSON.parse(send.mock.calls[2][1]!.body as string).nested.status).toBe('up')
 })
 
 it('does not send recovery for a transient failure that never passes grace', async () => {
-  const send=sender(); const delayed={...config,notification:{gracePeriod:1}}
-  await result('a',NOW,false); await result('b',NOW,false); await runNotifications(env,delayed,NOW+1,send)
-  await result('a',NOW+30,true); await result('b',NOW+30,true); await runNotifications(env,delayed,NOW+31,send)
+  const send = sender()
+  const delayed = { ...config, notification: { gracePeriod: 1 } }
+  await result('a', NOW, false)
+  await result('b', NOW, false)
+  await runNotifications(env, delayed, NOW + 1, send)
+  await result('a', NOW + 30, true)
+  await result('b', NOW + 30, true)
+  await runNotifications(env, delayed, NOW + 31, send)
   expect(send).not.toHaveBeenCalled()
 })
 
 it('never logs source webhook credentials or response bodies and rejects credential redirects', async () => {
-  const logs=vi.spyOn(console,'log').mockImplementation(()=>{}); const errors=vi.spyOn(console,'error').mockImplementation(()=>{})
-  const send=vi.fn().mockResolvedValue(new Response('private-remote-response',{status:302}))
-  vi.stubGlobal('fetch',send)
+  const logs = vi.spyOn(console, 'log').mockImplementation(() => {})
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const send = vi.fn().mockResolvedValue(new Response('private-remote-response', { status: 302 }))
+  vi.stubGlobal('fetch', send)
   try {
-    await webhookNotify(config.notificationTemplates![0].webhook,'private-message')
+    await webhookNotify(config.notificationTemplates![0].webhook, 'private-message')
     expect(send.mock.calls[0][1].redirect).toBe('manual')
-    const output=JSON.stringify([...logs.mock.calls,...errors.mock.calls])
-    for(const secret of ['private-message','secret-path','private-webhook-secret','private-remote-response']) expect(output).not.toContain(secret)
-  } finally { logs.mockRestore(); errors.mockRestore(); vi.unstubAllGlobals() }
+    const output = JSON.stringify([...logs.mock.calls, ...errors.mock.calls])
+    for (const secret of [
+      'private-message',
+      'secret-path',
+      'private-webhook-secret',
+      'private-remote-response',
+    ])
+      expect(output).not.toContain(secret)
+  } finally {
+    logs.mockRestore()
+    errors.mockRestore()
+    vi.unstubAllGlobals()
+  }
 })
 
 it('applies elapsed sample grace, ignores reused results, and suppresses transient recovery alerts', async () => {
-  const send=sender()
-  const delayed={...config,notification:{gracePeriod:1}}
-  await result('a',NOW,false); await result('b',NOW,false)
-  await runNotifications(env,delayed,NOW+1,send)
-  await runNotifications(env,delayed,NOW+70,send)
+  const send = sender()
+  const delayed = { ...config, notification: { gracePeriod: 1 } }
+  await result('a', NOW, false)
+  await result('b', NOW, false)
+  await runNotifications(env, delayed, NOW + 1, send)
+  await runNotifications(env, delayed, NOW + 70, send)
   expect(send).not.toHaveBeenCalled()
-  await result('a',NOW+60,false); await result('b',NOW+60,false)
-  await runNotifications(env,delayed,NOW+71,send)
+  await result('a', NOW + 60, false)
+  await result('b', NOW + 60, false)
+  await runNotifications(env, delayed, NOW + 71, send)
   expect(send).toHaveBeenCalledTimes(1)
-  await result('a',NOW+80,true); await result('b',NOW+80,true)
-  await runNotifications(env,delayed,NOW+81,send)
+  await result('a', NOW + 80, true)
+  await result('b', NOW + 80, true)
+  await runNotifications(env, delayed, NOW + 81, send)
   expect(send).toHaveBeenCalledTimes(2)
   expect(JSON.parse(send.mock.calls[1][1]!.body as string).nested.status).toBe('up')
 })
 
 it('resets unnotified grace when mixed results interrupt an outage and uses target overrides', async () => {
-  const send=sender()
-  const delayed={...config,notification:{gracePeriod:20},monitors:[{...config.monitors[0],notificationGracePeriodSeconds:60}]}
-  await result('a',NOW,false); await result('b',NOW,false); await runNotifications(env,delayed,NOW+1,send)
-  await result('a',NOW+30,true); await runNotifications(env,delayed,NOW+31,send)
-  await result('a',NOW+40,false); await result('b',NOW+40,false); await runNotifications(env,delayed,NOW+41,send)
-  await result('a',NOW+80,false); await result('b',NOW+80,false); await runNotifications(env,delayed,NOW+81,send)
+  const send = sender()
+  const delayed = {
+    ...config,
+    notification: { gracePeriod: 20 },
+    monitors: [{ ...config.monitors[0], notificationGracePeriodSeconds: 60 }],
+  }
+  await result('a', NOW, false)
+  await result('b', NOW, false)
+  await runNotifications(env, delayed, NOW + 1, send)
+  await result('a', NOW + 30, true)
+  await runNotifications(env, delayed, NOW + 31, send)
+  await result('a', NOW + 40, false)
+  await result('b', NOW + 40, false)
+  await runNotifications(env, delayed, NOW + 41, send)
+  await result('a', NOW + 80, false)
+  await result('b', NOW + 80, false)
+  await runNotifications(env, delayed, NOW + 81, send)
   expect(send).not.toHaveBeenCalled()
-  await result('a',NOW+100,false); await result('b',NOW+100,false); await runNotifications(env,delayed,NOW+101,send)
+  await result('a', NOW + 100, false)
+  await result('b', NOW + 100, false)
+  await runNotifications(env, delayed, NOW + 101, send)
   expect(send).toHaveBeenCalledTimes(1)
 })
 
 it('suppresses maintenance and excluded targets, and cancels pending retry jobs during maintenance', async () => {
-  const send=vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'))
-  await result('a',NOW,false); await result('b',NOW,false); await runNotifications(env,config,NOW+1,send)
+  const send = vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'))
+  await result('a', NOW, false)
+  await result('b', NOW, false)
+  await runNotifications(env, config, NOW + 1, send)
   expect(await queued()).toHaveLength(1)
-  const maintenance={...config,maintenances:[{body:'Upgrade',start:NOW,end:NOW+300,monitors:['web']}]}
-  await runNotifications(env,maintenance,NOW+2,send)
+  const maintenance = {
+    ...config,
+    maintenances: [{ body: 'Upgrade', start: NOW, end: NOW + 300, monitors: ['web'] }],
+  }
+  await runNotifications(env, maintenance, NOW + 2, send)
   expect(await queued()).toHaveLength(0)
   expect(send).toHaveBeenCalledTimes(1)
-  await result('a',NOW+310,true); await result('b',NOW+310,true)
-  await runNotifications(env,{...config,notification:{skipNotificationIds:['web']}},NOW+311,send)
+  await result('a', NOW + 310, true)
+  await result('b', NOW + 310, true)
+  await runNotifications(
+    env,
+    { ...config, notification: { skipNotificationIds: ['web'] } },
+    NOW + 311,
+    send
+  )
   expect(send).toHaveBeenCalledTimes(1)
 })
 

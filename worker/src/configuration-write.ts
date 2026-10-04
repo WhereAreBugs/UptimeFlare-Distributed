@@ -1,3 +1,4 @@
+import { scheduleInputs } from './scheduling'
 import type { MonitorTarget } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { pauseTransitionStatements } from './pause'
@@ -26,6 +27,14 @@ export async function saveConfiguration(
         ]
       : []
   })
+  const [priorInputs, newInputs] = await Promise.all([
+    scheduleInputs(previous),
+    scheduleInputs(value.monitors),
+  ])
+  const nextFingerprints = new Map(newInputs.map((input) => [input.id, input.fingerprint]))
+  const invalidated = priorInputs
+    .filter((input) => nextFingerprints.get(input.id) !== input.fingerprint)
+    .map((input) => input.id)
   const now = Math.floor(Date.now() / 1000)
   const writeId = crypto.randomUUID()
   const statement = env.UPTIMEFLARE_D1.prepare(
@@ -40,6 +49,9 @@ export async function saveConfiguration(
   const results = await env.UPTIMEFLARE_D1.batch([
     statement,
     ...pauseTransitionStatements(env, transitions, now, guard),
+    env.UPTIMEFLARE_D1.prepare(
+      `DELETE FROM monitor_schedule WHERE scope IN ('native','cloudflare') AND monitor_id IN (SELECT value FROM json_each(?)) AND (${guard})`
+    ).bind(JSON.stringify(invalidated)),
   ])
   if (results.some((result) => !result.success)) throw new Error('Configuration persistence failed')
   const changed = !!results[0].meta.changes

@@ -5,8 +5,8 @@ import { doMonitor } from '../src/monitor'
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }))
 vi.mock('../src/util', async (original) => ({
+  ...(await original<typeof import('../src/util')>()),
   fetchTimeout: fetchMock,
-  withTimeout: (await original<typeof import('../src/util')>()).withTimeout,
 }))
 
 const monitor: MonitorTarget = {
@@ -156,10 +156,17 @@ describe('native monitor incident diagnostics', () => {
   test('recognizes a body timeout even while the wall clock remains before its deadline', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(1000)
     const cancel = vi.fn().mockResolvedValue(undefined)
-    const reader = { read: vi.fn().mockRejectedValue(new Error('Promise timed out after 50ms')),
-      cancel, releaseLock: vi.fn() }
+    const reader = {
+      read: vi.fn().mockRejectedValue(new Error('Promise timed out after 50ms')),
+      cancel,
+      releaseLock: vi.fn(),
+    }
     fetchMock.mockResolvedValueOnce({ status: 200, body: { getReader: () => reader } })
-    const result = await doMonitor({ ...monitor, timeout: 50, responseKeyword: 'expected' }, 'SIN', {} as never)
+    const result = await doMonitor(
+      { ...monitor, timeout: 50, responseKeyword: 'expected' },
+      'SIN',
+      {} as never
+    )
     expect(result.status).toMatchObject({ up: false, stage: 'body', code: 'timeout' })
     expect(cancel).toHaveBeenCalledOnce()
   })

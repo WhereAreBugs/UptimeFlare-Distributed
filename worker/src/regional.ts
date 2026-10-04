@@ -103,6 +103,8 @@ export class RegionalExecutor {
     ).join('')
     if (hash !== request.configVersion)
       throw new Error('Regional configuration fingerprint mismatch')
+    if (this.queue.pendingCount + request.monitors.length > 160)
+      throw new Error('Regional queue full')
     this.configurations.delete(hash)
     this.configurations.set(hash, request.monitors)
     while (this.configurations.size > 4)

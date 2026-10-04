@@ -1,3 +1,4 @@
+import { usesStateV2 } from './storage-v2'
 import type { ProbeEnv } from './probes'
 import type { MonitorTarget } from '../../types/config'
 
@@ -18,10 +19,16 @@ export function pauseTransitionStatements(
 ): D1PreparedStatement[] {
   if (!transitions.length) return []
   const payload = JSON.stringify(transitions)
-  const ids = `SELECT json_extract(entry.value,'$.id') FROM json_each(?) entry WHERE ${matchesSavedPause('entry.value')}`
+  const ids = `SELECT json_extract(entry.value,'$.id') FROM json_each(?) entry WHERE ${matchesSavedPause(
+    'entry.value'
+  )}`
   const statements = [
-    env.UPTIMEFLARE_D1.prepare(`DELETE FROM notification_outbox WHERE monitor_id IN (${ids}) AND (${guard})`).bind(payload),
-    env.UPTIMEFLARE_D1.prepare(`DELETE FROM notification_state WHERE monitor_id IN (${ids}) AND (${guard})`).bind(payload),
+    env.UPTIMEFLARE_D1.prepare(
+      `DELETE FROM notification_outbox WHERE monitor_id IN (${ids}) AND (${guard})`
+    ).bind(payload),
+    env.UPTIMEFLARE_D1.prepare(
+      `DELETE FROM notification_state WHERE monitor_id IN (${ids}) AND (${guard})`
+    ).bind(payload),
     env.UPTIMEFLARE_D1.prepare(
       `INSERT INTO notification_observations
       (monitor_id,template_id,status,down_since,sample_time,observed_at,reason,notified,version)
@@ -36,19 +43,34 @@ export function pauseTransitionStatements(
       `DELETE FROM monitor_schedule WHERE scope IN ('native','cloudflare') AND monitor_id IN (${ids}) AND (${guard})`
     ).bind(payload),
   ]
-  if (transitions.some(transition => transition.native)) statements.push(
-    env.UPTIMEFLARE_D1.prepare(
-      `UPDATE monitor_schedule SET lease_until=0,lease_key='' WHERE scope='native-writer' AND monitor_id='state' AND (${guard}) AND EXISTS (${ids})`
-    ).bind(payload)
-  )
+  if (transitions.some((transition) => transition.native))
+    statements.push(
+      env.UPTIMEFLARE_D1.prepare(
+        `UPDATE monitor_schedule SET lease_until=0,lease_key='' WHERE scope='native-writer' AND monitor_id='state' AND (${guard}) AND EXISTS (${ids})`
+      ).bind(payload)
+    )
+  if (usesStateV2(env)) {
+    const pausedNative = `SELECT json_extract(entry.value,'$.id') FROM json_each(?) entry WHERE json_extract(entry.value,'$.paused')=1 AND json_extract(entry.value,'$.native')=1 AND ${matchesSavedPause(
+      'entry.value'
+    )}`
+    statements.push(
+      env.UPTIMEFLARE_D1.prepare(
+        `UPDATE native_incidents SET end=MAX(start,?) WHERE end IS NULL AND monitor_id IN (${pausedNative}) AND (${guard})`
+      ).bind(now, payload)
+    )
+    statements.push(
+      env.UPTIMEFLARE_D1.prepare(
+        `UPDATE native_hot SET up=1,error='',incident_start=NULL,sequence=sequence+1 WHERE monitor_id IN (${pausedNative}) AND (${guard})`
+      ).bind(payload)
+    )
+  }
   return statements
 }
 
 /** A request that read configuration before a pause must not enqueue or start new work afterwards. */
 export const NOT_PAUSED_IN_SAVED_CONFIG = (monitorId: string) =>
-  `NOT EXISTS (SELECT 1 FROM admin_config config,json_each(json_extract(config.value,'$.monitors')) monitor
-    WHERE config.id=1 AND json_extract(monitor.value,'$.id')=${monitorId}
-      AND json_extract(monitor.value,'$.paused')=1)`
+  `${monitorId} NOT IN (SELECT json_extract(monitor.value,'$.id') FROM admin_config config,json_each(json_extract(config.value,'$.monitors')) monitor
+    WHERE config.id=1 AND json_extract(monitor.value,'$.paused')=1)`
 
 /** Refresh only pause flags: no target, header, credential or notification payload is read. */
 export async function withSavedPauseFlags(env: ProbeEnv, monitors: MonitorTarget[]) {
@@ -58,14 +80,23 @@ export async function withSavedPauseFlags(env: ProbeEnv, monitors: MonitorTarget
     FROM json_each(json_extract(config.value,'$.monitors')) monitor
     WHERE json_extract(monitor.value,'$.id') IN (SELECT value FROM json_each(?))) flags
     FROM admin_config config WHERE config.id=1`
-  ).bind(JSON.stringify(monitors.map(monitor => monitor.id))).first<{ revision: number; flags: string }>()
+  )
+    .bind(JSON.stringify(monitors.map((monitor) => monitor.id)))
+    .first<{ revision: number; flags: string }>()
   if (row && !Number.isSafeInteger(row.revision)) throw new Error('Pause configuration read failed')
-  const flags = new Map((row ? JSON.parse(row.flags) as { id: string; paused: number }[] : [])
-    .map(value => [value.id, !!value.paused]))
+  const flags = new Map(
+    (row ? (JSON.parse(row.flags) as { id: string; paused: number }[]) : []).map((value) => [
+      value.id,
+      !!value.paused,
+    ])
+  )
   return {
-    monitors: monitors.map(monitor => flags.has(monitor.id) ? { ...monitor, paused: flags.get(monitor.id)! } : monitor),
+    monitors: monitors.map((monitor) =>
+      flags.has(monitor.id) ? { ...monitor, paused: flags.get(monitor.id)! } : monitor
+    ),
     // Fence all destructive reconciliation against a config change after the safe projection read.
-    guard: row ? `EXISTS (SELECT 1 FROM admin_config WHERE id=1 AND revision=${row.revision})`
+    guard: row
+      ? `EXISTS (SELECT 1 FROM admin_config WHERE id=1 AND revision=${row.revision})`
       : 'NOT EXISTS (SELECT 1 FROM admin_config WHERE id=1)',
   }
 }

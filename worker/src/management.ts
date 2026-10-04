@@ -1,3 +1,4 @@
+import { getPublicNativeState } from './store'
 import type { MonitorTarget, WorkerConfig } from '../../types/config'
 import type {
   ManagementPermission,
@@ -289,7 +290,7 @@ async function status(
         latency_ms: number
       }>(),
     monitors.some((monitor) => !monitor.probes?.length)
-      ? getFromStore(env, 'state')
+      ? getPublicNativeState(env, monitors)
       : Promise.resolve(null),
   ])
   if (!latest.success) throw new Error('Status read failed')

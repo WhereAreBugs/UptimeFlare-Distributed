@@ -152,7 +152,7 @@ it('reads only active latest/totals with two queries, keeping real status/counts
   expect(compact.probes[0]).toMatchObject({ stage: 'body', code: 'timeout' })
   expect(
     (await getProbeSummaries(env, [targets[1]], config.probes, NOW))['target-1'].probes[0].message
-  ).toBe('Detailed failure history message')
+  ).toBe('HTTP response body timed out')
   const full = (await getProbeSummaries(env, [targets[0]], config.probes, NOW))['target-0']
   expect(full).toMatchObject({ historyLoaded: true, status: 'up', up: 3, uptimePercent: 100 })
   expect(full.probes[0].history).toHaveLength(144)

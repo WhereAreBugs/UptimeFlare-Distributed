@@ -1,9 +1,14 @@
+import { withResources } from './resources'
+export { Coordinator } from './coordinator'
+import type { Coordinator } from './coordinator'
+import { deliverNotifications } from './notifications'
+import { createExecutionBudget } from './execution-budget'
 import { pageAccess } from './access'
 import { RegionalExecutor, type RegionalRequest } from './regional'
 import dataHandler from './http/data'
 import badgeHandler from './http/badge'
 import incidentsHandler from './http/incidents'
-import { getPublicDashboard } from './public-dashboard'
+import { publicStateResponse } from './public-dashboard'
 import { runNativeMonitors } from './native-monitor'
 import { cleanupMonitorSchedules } from './scheduling'
 import { DurableObject } from 'cloudflare:workers'
@@ -22,6 +27,10 @@ import { handlePublicHistoryRequest } from './history'
 import { publishPublicDashboard } from './public-dashboard'
 
 export interface Env {
+  COORDINATOR_DO?: DurableObjectNamespace<Coordinator>
+  STATE_STORAGE_VERSION?: string
+  METRICS_ENABLED?: string
+  MIGRATION_MODE?: string
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
   UPTIMEFLARE_D1: D1Database
   UPTIMEFLARE_PUBLIC_KV?: KVNamespace
@@ -31,7 +40,7 @@ export interface Env {
   ADMIN_SESSION_SECRET?: string
 }
 
-const Worker = {
+const implementation = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const access = pageAccess(request, fallbackConfig.passwordProtection)
     if (access) return access
@@ -43,9 +52,7 @@ const Worker = {
       if (request.method !== 'GET')
         return new Response(null, { status: 405, headers: { Allow: 'GET' } })
       try {
-        return Response.json(await getPublicDashboard(env, fallbackConfig), {
-          headers: { 'Cache-Control': 'no-store' },
-        })
+        return await publicStateResponse(env, fallbackConfig)
       } catch {
         return Response.json({ error: 'Public dashboard temporarily unavailable' }, { status: 503 })
       }
@@ -64,9 +71,13 @@ const Worker = {
     } else if (request.method !== 'GET') {
       return new Response(null, { status: 405, headers: { Allow: 'GET' } })
     }
+    if (env.MIGRATION_MODE === '1' && pathname === '/api/probes/ingest')
+      return Response.json(
+        { error: 'Storage migration in progress; retry the same batch' },
+        { status: 503 }
+      )
+    if (pathname === '/api/history') return handlePublicHistoryRequest(request, env)
     const workerConfig = await getRuntimeConfig(env, fallbackConfig)
-    if (new URL(request.url).pathname === '/api/history')
-      return handlePublicHistoryRequest(request, env, workerConfig)
     return handleProbeRequest(
       request,
       env,
@@ -75,6 +86,7 @@ const Worker = {
     )
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (env.MIGRATION_MODE === '1') return
     ctx.waitUntil(
       cleanupProbeResults(env).catch(() => console.error('Probe retention cleanup failed'))
     )
@@ -99,17 +111,15 @@ const Worker = {
       (monitor) => monitor.probes?.includes('cloudflare')
     ).length
     const nativeCount = active.filter((monitor) => !monitor.probes?.length).length
-    const budget = { remaining: MAX_SCHEDULED_TARGETS_PER_CRON }
+    const budget = createExecutionBudget()
     // Reserve a proportional share so a busy Cloudflare scope cannot starve legacy native targets.
     const cloudflareLimit =
       nativeCount && cloudflareCount
         ? Math.max(
             1,
-            Math.floor(
-              (MAX_SCHEDULED_TARGETS_PER_CRON * cloudflareCount) / (cloudflareCount + nativeCount)
-            )
+            Math.floor((budget.remaining * cloudflareCount) / (cloudflareCount + nativeCount))
           )
-        : MAX_SCHEDULED_TARGETS_PER_CRON
+        : budget.remaining
     await runCloudflareProbe(
       env,
       workerConfig.monitors,
@@ -120,16 +130,34 @@ const Worker = {
       cloudflareLimit
     )
     await runNativeMonitors(env, workerConfig, time, getLocation, undefined, budget)
-    await runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
-      console.error('Notification evaluation failed')
-    )
-    await publishPublicDashboard(env, workerConfig, time).catch(() =>
-      console.error('Public dashboard snapshot publication failed; retaining last known data')
-    )
+    if (env.STATE_STORAGE_VERSION === '2' && env.COORDINATOR_DO) {
+      const coordinator = env.COORDINATOR_DO.get(env.COORDINATOR_DO.idFromName('state-v2'))
+      await coordinator.evaluate(Math.floor(Date.now() / 1000))
+      await deliverNotifications(env, workerConfig, Math.floor(Date.now() / 1000))
+      await coordinator.materialize(time)
+    } else {
+      await runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
+        console.error('Notification evaluation failed')
+      )
+      await publishPublicDashboard(env, workerConfig, time).catch(() =>
+        console.error('Public dashboard snapshot publication failed; retaining last known data')
+      )
+    }
   },
 }
 
-export default Worker
+export default {
+  fetch(request: Request, env: Env) {
+    return withResources(env, 'root-fetch', (measured) =>
+      implementation.fetch(request, measured)
+    ).catch(() => Response.json({ error: 'Service temporarily unavailable' }, { status: 503 }))
+  },
+  scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    return withResources(env, 'root-cron', (measured) =>
+      implementation.scheduled(event, measured, ctx)
+    )
+  },
+}
 
 export class RemoteChecker extends DurableObject {
   private executor = new RegionalExecutor()

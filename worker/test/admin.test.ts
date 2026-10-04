@@ -227,12 +227,12 @@ describe('authenticated web configuration with actual D1', () => {
   it('bounds bodies and never echoes parsing/SQL errors or configured secrets', async () => {
     const cookie = await login()
     const response = await handleAdminRequest(
-      request('config', 'PUT', 'x'.repeat(65537), cookie),
+      request('config', 'PUT', 'x'.repeat(512 * 1024 + 1), cookie),
       env,
       fallback
     )
     expect(response.status).toBe(400)
-    expect(await response.text()).toContain('64 KiB')
+    expect(await response.text()).toContain('512 KiB')
     const bad = await handleAdminRequest(
       request('config', 'PUT', '{"secret":"PRIVATE', cookie),
       env,

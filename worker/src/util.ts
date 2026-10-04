@@ -1,10 +1,44 @@
+import { classifyNativeFailure } from './diagnostics'
 import { MonitorTarget, WebhookConfig, WorkerConfig } from '../../types/config'
 import { workerConfig } from '../../uptime.config'
 import { isInMaintenance } from '../../util/maintenance'
 
+/** Bound keyword responses and include body reads in the configured check deadline. */
+export async function readResponseBody(response: Response, deadline: number): Promise<string> {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const chunks: string[] = []
+  let bytes = 0
+  try {
+    while (true) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw new Error('[body/timeout] HTTP response body timed out')
+      let part: ReadableStreamReadResult<Uint8Array>
+      try {
+        part = await withTimeout(remaining, reader.read())
+      } catch (error) {
+        if (Date.now() >= deadline || classifyNativeFailure(error).code === 'timeout')
+          throw new Error('[body/timeout] HTTP response body timed out')
+        throw error
+      }
+      if (part.done) break
+      bytes += part.value.byteLength
+      if (bytes > 1024 * 1024) throw new Error('[body/too_large] HTTP response body exceeds 1 MiB')
+      chunks.push(decoder.decode(part.value, { stream: true }))
+    }
+    chunks.push(decoder.decode())
+    return chunks.join('')
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+}
+
 async function getWorkerLocation() {
+  const deadline = Date.now() + 3000
   const res = await fetchTimeout('https://cloudflare.com/cdn-cgi/trace', 3000)
-  const text = await withTimeout(3000, res.text())
+  const text = await readResponseBody(res, deadline)
 
   const colo = /^colo=(.*)$/m.exec(text)?.[1]
   return colo
@@ -19,14 +53,19 @@ const fetchTimeout = (
   const abort = () => controller.abort()
   if (signal?.aborted) abort()
   signal?.addEventListener('abort', abort, { once: true })
-  const promise = fetch(url, { signal: controller.signal, ...options })
+  const promise = fetch(url, { signal: controller.signal, ...options, redirect: 'manual' })
   const timeout = setTimeout(() => controller.abort(), ms)
-  return promise.finally(() => { clearTimeout(timeout); signal?.removeEventListener('abort', abort) })
+  return promise.finally(() => {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  })
 }
 
 function withTimeout<T>(millis: number, promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
-  const timeout = new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis) })
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis)
+  })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
@@ -126,12 +165,16 @@ async function webhookNotify(webhook: WebhookConfig, message: string) {
         throw 'Unrecognized payload type: ' + webhook.payloadType
     }
 
-    const resp = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body, redirect: 'manual' })
+    const resp = await fetchTimeout(url, webhook.timeout ?? 5000, {
+      method,
+      headers,
+      body,
+      redirect: 'manual',
+    })
 
+    await resp.body?.cancel()
     if (!resp.ok) {
-      console.log(
-        'Webhook returned an unsuccessful HTTP response, code: ' + resp.status
-      )
+      console.log('Webhook returned an unsuccessful HTTP response, code: ' + resp.status)
     } else {
       console.log('Webhook notification sent successfully, code: ' + resp.status)
     }

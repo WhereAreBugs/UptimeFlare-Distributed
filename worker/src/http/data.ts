@@ -149,7 +149,37 @@ export default async function handler(req: Request, env: PublicDashboardEnv): Pr
     configRevision: dashboard.configRevision,
   }
 
-  return new Response(JSON.stringify(ret), {
+  let body = JSON.stringify(ret)
+  if (new TextEncoder().encode(body).byteLength > 256 * 1024) {
+    for (const monitor of Object.values(ret.monitors) as any[]) {
+      if (monitor.probes)
+        monitor.probes = monitor.probes.map((p: any) => ({
+          id: p.id,
+          status: p.status,
+          stale: p.stale,
+          latest: p.latest,
+          latencyMs: p.latencyMs,
+          stage: p.stage,
+          code: p.code,
+        }))
+    }
+    body = JSON.stringify({
+      ...ret,
+      projection: 'current-summary',
+      detailsEndpoint: '/api/history',
+    })
+  }
+  if (new TextEncoder().encode(body).byteLength > 256 * 1024) {
+    for (const monitor of Object.values(ret.monitors) as any[]) delete monitor.probes
+    body = JSON.stringify({
+      ...ret,
+      projection: 'current-summary',
+      detailsEndpoint: '/api/history',
+    })
+  }
+  if (new TextEncoder().encode(body).byteLength > 256 * 1024)
+    return Response.json({ error: 'Public summary exceeds budget' }, { status: 503, headers })
+  return new Response(body, {
     headers,
   })
 }
