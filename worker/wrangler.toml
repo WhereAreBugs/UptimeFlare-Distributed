@@ -8,3 +8,13 @@ binding = "UPTIMEFLARE_D1"
 database_name = "uptimeflare_d1"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "../migrations"
+
+[durable_objects]
+bindings = [{ name = "REMOTE_CHECKER_DO", class_name = "RemoteChecker" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RemoteChecker"]
+
+[triggers]
+crons = ["* * * * *"]

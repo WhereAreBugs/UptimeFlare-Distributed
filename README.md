@@ -92,7 +92,7 @@ The checklist retains upstream history, including retired items. The [feature ma
 - [x] Customizable footer
 - [x] New header logo
 - [x] Improve CPU time usage
-- [x] Local deployment (docs WIP)
+- [x] Local deployment
 
 ## Deployment documentation
 

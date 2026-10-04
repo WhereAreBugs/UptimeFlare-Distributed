@@ -1,23 +1,124 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
 
-echo "Initializing database schema..."
-cd /app
-npx wrangler d1 execute uptimeflare_d1 --file=/app/init.sql
+APP_DIR=${UPTIMEFLARE_APP_DIR:-/app}
+STATE_DIR=${UPTIMEFLARE_STATE_DIR:-$APP_DIR/.wrangler/state}
+WORKER_PORT=${UPTIMEFLARE_WORKER_PORT:-8787}
+PAGES_PORT=${UPTIMEFLARE_PAGES_PORT:-8788}
+LISTEN_IP=${UPTIMEFLARE_LISTEN_IP:-0.0.0.0}
+LOCAL_PROTOCOL=${UPTIMEFLARE_LOCAL_PROTOCOL:-http}
+RUNTIME_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uptimeflare-runtime.XXXXXX")
+CHILD_PIDS=()
 
-# Start Worker
-echo "Starting Worker..."
-cd /app/worker
-npx wrangler dev --inspector-port 9229 --test-scheduled --persist-to ../.wrangler/state --ip 0.0.0.0 --port 8787 2>&1 > /app/worker.log &
+cleanup() {
+  trap - EXIT INT TERM
+  for pid in "${CHILD_PIDS[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  for ignored in 1 2 3 4 5; do
+    active=false
+    for pid in "${CHILD_PIDS[@]}"; do if kill -0 "$pid" 2>/dev/null; then active=true; fi; done
+    if ! $active; then break; fi
+    sleep 1
+  done
+  for pid in "${CHILD_PIDS[@]}"; do kill -KILL "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
+  rm -rf "$RUNTIME_DIR"
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
-# Start Pages
-echo "Starting Pages..."
-cd /app
-npx wrangler pages dev .vercel/output/static --inspector-port 9230 --ip 0.0.0.0 --port 8788 2>&1 > /app/pages.log &
+export NEXT_TELEMETRY_DISABLED=1 WRANGLER_SEND_METRICS=false
+export CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false CLOUDFLARE_INCLUDE_PROCESS_ENV=false
+export WRANGLER_LOG_PATH="$RUNTIME_DIR/wrangler.log"
+export UPTIMEFLARE_APP_DIR="$APP_DIR" UPTIMEFLARE_RUNTIME_DIR="$RUNTIME_DIR"
+export UPTIMEFLARE_WORKER_PORT="$WORKER_PORT" UPTIMEFLARE_PAGES_PORT="$PAGES_PORT" UPTIMEFLARE_LOCAL_PROTOCOL="$LOCAL_PROTOCOL"
 
-# CRON Loop
-echo "Starting CRON loop..."
-touch /app/scheduled.log
-echo "* * * * * /usr/bin/curl -m 60 -s 'http://127.0.0.1:8787/__scheduled' >> /app/scheduled.log 2>&1" | crontab -
-cron
+# Local configs live beside an allowlisted, private .dev.vars file. No repository
+# file or image layer receives runtime credentials, and no Cloudflare API token is loaded.
+node <<'JS'
+const fs = require('node:fs'); const path = require('node:path');
+const app = path.resolve(process.env.UPTIMEFLARE_APP_DIR);
+const runtime = process.env.UPTIMEFLARE_RUNTIME_DIR;
+for (const name of ['UPTIMEFLARE_WORKER_PORT','UPTIMEFLARE_PAGES_PORT']) {
+  const port=Number(process.env[name]); if (!Number.isInteger(port)||port<1||port>65535) throw new Error('Invalid local listen port');
+}
+if (!['http','https'].includes(process.env.UPTIMEFLARE_LOCAL_PROTOCOL)) throw new Error('Invalid local protocol');
+const password=process.env.ADMIN_PASSWORD ?? ''; const session=process.env.ADMIN_SESSION_SECRET ?? '';
+if (password.length<16 || session.length<32) throw new Error('ADMIN_PASSWORD must contain at least 16 characters; ADMIN_SESSION_SECRET at least 32');
+let tokens={}; try {tokens=JSON.parse(process.env.PROBE_TOKENS || '{}')} catch {throw new Error('PROBE_TOKENS must be a JSON object')}
+if (!tokens||typeof tokens!=='object'||Array.isArray(tokens)) throw new Error('PROBE_TOKENS must be a JSON object');
+// Quoting follows Wrangler's dotenv parser without altering backslashes/Unicode.
+function quote(value) {
+  if (/[\r\n\0]/.test(value)) throw new Error('Local secrets cannot contain line breaks or NUL');
+  for (const delimiter of ["'",'`','"']) {
+    if (!value.includes(delimiter) && (delimiter!=='"'||!value.includes('\\'))) return delimiter+value+delimiter;
+  }
+  throw new Error('Local administrator secrets require a dotenv-safe quote; use openssl rand -hex 32');
+}
+const registry=JSON.stringify(tokens).replace(/'/g,'\\u0027');
+const lines={PROBE_TOKENS:registry,ADMIN_PASSWORD:password,ADMIN_SESSION_SECRET:session};
+fs.writeFileSync(path.join(runtime,'.dev.vars'),Object.entries(lines).map(([key,value])=>`${key}=${quote(value)}`).join('\n')+'\n',{mode:0o600});
+const common={compatibility_date:'2025-04-02',compatibility_flags:['nodejs_compat'],d1_databases:[{binding:'UPTIMEFLARE_D1',database_name:'uptimeflare_d1',database_id:'00000000-0000-0000-0000-000000000000'}]};
+fs.writeFileSync(path.join(runtime,'worker.json'),JSON.stringify({...common,name:'uptimeflare-local-worker',main:path.join(app,'worker/src/index.ts'),durable_objects:{bindings:[{name:'REMOTE_CHECKER_DO',class_name:'RemoteChecker'}]},migrations:[{tag:'v1',new_sqlite_classes:['RemoteChecker']}],triggers:{crons:['* * * * *']}}));
+fs.writeFileSync(path.join(runtime,'wrangler.json'),JSON.stringify({...common,name:'uptimeflare-local-pages',pages_build_output_dir:path.join(app,'.vercel/output/static')}));
+JS
 
-exec tail -f /app/worker.log /app/pages.log /app/scheduled.log
+mkdir -p "$STATE_DIR"
+STATE_DIR=$(cd "$STATE_DIR" && pwd)
+WRANGLER="$APP_DIR/node_modules/wrangler/bin/wrangler.js"
+if [[ ! -f "$APP_DIR/.vercel/output/static/_worker.js/index.js" || ! -f "$WRANGLER" ]]; then
+  echo "Build Pages and install dependencies before starting local deployment." >&2
+  exit 1
+fi
+
+echo "Initializing local shared D1 schema..."
+node "$WRANGLER" d1 execute uptimeflare_d1 --config "$RUNTIME_DIR/worker.json" --local --persist-to "$STATE_DIR" --file "$APP_DIR/init.sql" --yes --json >/dev/null
+
+echo "Starting local Worker and Pages..."
+(cd "$APP_DIR/worker" && exec node "$WRANGLER" dev --config "$RUNTIME_DIR/worker.json" --local --test-scheduled --persist-to "$STATE_DIR" --ip "$LISTEN_IP" --port "$WORKER_PORT" --inspector-port 0 --local-protocol "$LOCAL_PROTOCOL" --log-level error) &
+CHILD_PIDS+=("$!")
+# Pages rejects --config; discover the private wrangler.json from its own cwd.
+(cd "$RUNTIME_DIR" && exec node "$WRANGLER" pages dev --persist-to "$STATE_DIR" --ip "$LISTEN_IP" --port "$PAGES_PORT" --inspector-port 0 --local-protocol "$LOCAL_PROTOCOL" --log-level error) &
+CHILD_PIDS+=("$!")
+
+CURL_TLS=()
+if [[ "$LOCAL_PROTOCOL" == https ]]; then CURL_TLS=(-k); fi
+WORKER_URL="$LOCAL_PROTOCOL://127.0.0.1:$WORKER_PORT"
+PAGES_URL="$LOCAL_PROTOCOL://127.0.0.1:$PAGES_PORT"
+ready=false
+for ignored in $(seq 1 60); do
+  for pid in "${CHILD_PIDS[@]}"; do if ! kill -0 "$pid" 2>/dev/null; then echo "A local runtime exited during startup." >&2; exit 1; fi; done
+  worker_status=$(curl "${CURL_TLS[@]}" -s -o /dev/null -w '%{http_code}' --max-time 2 "$WORKER_URL/api/admin/config" || true)
+  pages_status=$(curl "${CURL_TLS[@]}" -s -o /dev/null -w '%{http_code}' --max-time 2 "$PAGES_URL/api/admin/config" || true)
+  if [[ "$worker_status" == 401 && "$pages_status" == 401 ]]; then ready=true; break; fi
+  sleep 1
+ done
+if ! $ready; then echo "Local runtimes did not become ready within 60 attempts." >&2; exit 1; fi
+
+echo "Pages ready on port $PAGES_PORT; shared D1 persisted at $STATE_DIR"
+# One sequential loop awaits each scheduled invocation before the next minute.
+# There is no cron daemon and no overlapping curl process.
+schedule_loop() (
+  trap - EXIT
+  task_pid=''
+  trap 'if [[ -n "$task_pid" ]]; then kill -TERM "$task_pid" 2>/dev/null || true; wait "$task_pid" 2>/dev/null || true; fi; exit 0' INT TERM
+  while true; do
+    curl "${CURL_TLS[@]}" --fail --silent --show-error --connect-timeout 2 --max-time 900 "$WORKER_URL/__scheduled" >/dev/null &
+    task_pid=$!
+    if ! wait "$task_pid"; then echo "Local scheduled invocation failed; retrying at the next minute." >&2; fi
+    sleep "$((60-$(date +%s)%60))" &
+    task_pid=$!
+    wait "$task_pid"
+  done
+)
+schedule_loop &
+CHILD_PIDS+=("$!")
+
+while true; do
+  for pid in "${CHILD_PIDS[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "A local runtime exited; stopping the remaining processes." >&2
+      exit 1
+    fi
+  done
+  sleep 2
+done

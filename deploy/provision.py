@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 parser = argparse.ArgumentParser()
-parser.add_argument('phase', choices=['prepare', 'domain'])
+parser.add_argument('phase', choices=['prepare', 'domain', 'reconcile'])
 args = parser.parse_args()
 account = os.environ['CLOUDFLARE_ACCOUNT_ID']
 token = os.environ['CLOUDFLARE_API_TOKEN']
@@ -42,13 +42,17 @@ def api(path, method='GET', body=None, missing=False):
     return value['result']
 
 
-if args.phase == 'prepare':
+if args.phase in ('prepare', 'reconcile'):
     databases = api(f'/accounts/{account}/d1/database?per_page=1000')
     matches = [item for item in databases if item['name'] == database]
     if len(matches) > 1:
         raise SystemExit('Duplicate database names')
     db = matches[0] if matches else api(f'/accounts/{account}/d1/database', 'POST', {'name': database})
     database_id = db['uuid']
+    if args.phase == 'reconcile':
+        api(f'/accounts/{account}/d1/database/{database_id}/query', 'POST', {'sql': Path('migrations/0006_probe_history.sql').read_text(), 'params': []})
+        print('Reconciled daily history after producer deployment')
+        raise SystemExit(0)
     api(f'/accounts/{account}/d1/database/{database_id}/query', 'POST', {'sql': Path('init.sql').read_text(), 'params': []})
     secret_bindings = {}
     for key in ['PROBE_TOKENS', 'ADMIN_PASSWORD', 'ADMIN_SESSION_SECRET']:

@@ -1,4 +1,5 @@
 terraform {
+  required_version = ">= 1.5.0"
   required_providers {
     cloudflare = {
       source  = "cloudflare/cloudflare"
@@ -17,8 +18,9 @@ variable "CLOUDFLARE_ACCOUNT_ID" {
 }
 
 variable "enable_do_migration" {
-  type    = bool
-  default = false
+  description = "Set true on the first Worker deployment to create the RemoteChecker SQLite Durable Object namespace"
+  type        = bool
+  default     = false
 }
 
 variable "probe_tokens" {
@@ -28,9 +30,39 @@ variable "probe_tokens" {
   sensitive   = true
 }
 
+variable "admin_password" {
+  description = "Web administrator password, supplied through TF_VAR_admin_password"
+  type        = string
+  sensitive   = true
+  validation {
+    condition     = length(var.admin_password) >= 16
+    error_message = "The administrator password must contain at least 16 characters."
+  }
+}
+
+variable "admin_session_secret" {
+  description = "Independent session-signing secret, supplied through TF_VAR_admin_session_secret"
+  type        = string
+  sensitive   = true
+  validation {
+    condition     = length(var.admin_session_secret) >= 32
+    error_message = "The session-signing secret must contain at least 32 characters."
+  }
+}
+
+locals {
+  worker_secrets = merge({
+    ADMIN_PASSWORD       = var.admin_password
+    ADMIN_SESSION_SECRET = var.admin_session_secret
+  }, var.probe_tokens == "" ? {} : { PROBE_TOKENS = var.probe_tokens })
+  page_secrets = { for name, value in local.worker_secrets : name => {
+    type = "secret_text", value = value
+  } }
+}
+
 resource "cloudflare_d1_database" "uptimeflare_d1" {
-  account_id            = var.CLOUDFLARE_ACCOUNT_ID
-  name                  = "uptimeflare_d1"
+  account_id = var.CLOUDFLARE_ACCOUNT_ID
+  name       = "uptimeflare_d1"
   read_replication = {
     mode = "auto"
   }
@@ -66,10 +98,10 @@ resource "cloudflare_workers_script" "uptimeflare_worker" {
     name = "UPTIMEFLARE_D1"
     type = "d1"
     id   = cloudflare_d1_database.uptimeflare_d1.id
-  }], var.probe_tokens == "" ? [] : [{
-    name = "PROBE_TOKENS"
+    }], [for name, value in local.worker_secrets : {
+    name = name
     type = "secret_text"
-    text = var.probe_tokens
+    text = value
   }])
 }
 
@@ -77,7 +109,7 @@ resource "cloudflare_workers_cron_trigger" "uptimeflare_worker_cron" {
   account_id  = var.CLOUDFLARE_ACCOUNT_ID
   script_name = cloudflare_workers_script.uptimeflare_worker.script_name
   schedules = [{
-    cron = "* * * * *" # every 1 minute, you can reduce the write counts by increase the worker settings of `kvWriteCooldownMinutes`
+    cron = "* * * * *" # minute scheduler; each target's interval determines whether a check is due
   }]
 }
 
@@ -89,15 +121,12 @@ resource "cloudflare_pages_project" "uptimeflare" {
   deployment_configs = {
     # SMH Cloudflare provider will throw an error without preview config
     preview = {
-      fail_open = false
+      compatibility_date  = "2025-04-02"
+      compatibility_flags = ["nodejs_compat"]
+      fail_open           = false
     }
     production = {
-      env_vars = var.probe_tokens == "" ? {} : {
-        PROBE_TOKENS = {
-          type  = "secret_text"
-          value = var.probe_tokens
-        }
-      }
+      env_vars = local.page_secrets
       d1_databases = {
         UPTIMEFLARE_D1 = {
           id = cloudflare_d1_database.uptimeflare_d1.id
@@ -113,4 +142,13 @@ resource "cloudflare_pages_project" "uptimeflare" {
   build_config = {
     root_dir = "/"
   }
+}
+
+output "d1_database_id" {
+  description = "Set this ID in both Wrangler D1 bindings before applying SQL migrations"
+  value       = cloudflare_d1_database.uptimeflare_d1.id
+}
+
+output "pages_project_name" {
+  value = cloudflare_pages_project.uptimeflare.name
 }

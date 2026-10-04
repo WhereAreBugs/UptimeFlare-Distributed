@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+**/node_modules
 /.pnp
 .pnp.js
 
@@ -26,6 +27,10 @@ yarn-error.log*
 
 # local env files
 .env*.local
+.env*
+.dev.vars*
+**/.dev.vars*
+**/.env*
 
 # vercel
 .vercel
@@ -38,3 +43,10 @@ next-env.d.ts
 terraform.tfstate*
 
 /.wrangler
+**/.wrangler
+.git
+.deployment
+worker/wrangler.deploy.json
+*.log
+*.tfvars
+*.tfvars.json
