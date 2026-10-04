@@ -17,7 +17,7 @@ account = os.environ['CLOUDFLARE_ACCOUNT_ID']
 token = os.environ['CLOUDFLARE_API_TOKEN']
 project = os.environ.get('PAGES_PROJECT', 'uptimeflare-distributed')
 database = os.environ.get('D1_DATABASE', 'uptimeflare-distributed-d1')
-worker = os.environ.get('WORKER_NAME', 'uptimeflare-distributed-worker')
+worker = os.environ.get('WORKER_NAME', 'uptimeflare-distributed')
 snapshot_namespace = project + '-public-status'
 schema_hash = hashlib.sha256(Path('init.sql').read_bytes()).hexdigest()
 schema_state = Path('.deployment/schema-prepare.json')
@@ -46,6 +46,10 @@ def api(path, method='GET', body=None, missing=False):
     return value['result']
 
 
+# Provisioning never performs a data-format migration implicitly.
+if os.environ.get('UNIFIED_DEPLOY_APPROVED') != '1':
+    raise SystemExit('Unified deployment is disabled; complete backup/migration review before enabling UNIFIED_DEPLOY_APPROVED')
+
 if args.phase in ('prepare', 'reconcile'):
     databases = api(f'/accounts/{account}/d1/database?per_page=1000')
     matches = [item for item in databases if item['name'] == database]
@@ -54,86 +58,54 @@ if args.phase in ('prepare', 'reconcile'):
     db = matches[0] if matches else api(f'/accounts/{account}/d1/database', 'POST', {'name': database})
     database_id = db['uuid']
     if args.phase == 'reconcile':
-        if schema_state.exists():
-            prepared = json.loads(schema_state.read_text())
-            if prepared.get('database_id') == database_id and prepared.get('schema_hash') == schema_hash and prepared.get('changed') is False:
-                print('Schema unchanged; daily history reconciliation is not needed')
-                raise SystemExit(0)
-        api(f'/accounts/{account}/d1/database/{database_id}/query', 'POST', {'sql': Path('migrations/0006_probe_history.sql').read_text(), 'params': []})
-        print('Reconciled daily history after producer deployment')
+        print('Unified producers update rollups transactionally; no full-history reconciliation required')
         raise SystemExit(0)
-    path = f'/accounts/{account}/pages/projects/{project}'
-    existing = api(path, missing=True)
-    previous_config = (existing or {}).get('deployment_configs', {}).get('production', {})
-    recorded_hash = previous_config.get('env_vars', {}).get('UPTIMEFLARE_SCHEMA_HASH') or {}
-    # A one-time verified bootstrap hash is useful when a pre-existing installation
-    # already has this exact schema but its quota prevents even idempotent DDL.
-    verified_hash = os.environ.get('D1_VERIFIED_SCHEMA_HASH', '')
-    bound_database = previous_config.get('d1_databases', {}).get('UPTIMEFLARE_D1', {}).get('id')
-    bootstrap_verified = verified_hash == schema_hash and os.environ.get('D1_VERIFIED_DATABASE_ID') == database_id
-    schema_changed = not matches or bound_database != database_id or not (recorded_hash.get('value') == schema_hash or bootstrap_verified)
-    if schema_changed:
+    if os.environ.get('D1_VERIFIED_SCHEMA_HASH') != schema_hash or os.environ.get('D1_VERIFIED_DATABASE_ID') != database_id:
         api(f'/accounts/{account}/d1/database/{database_id}/query', 'POST', {'sql': Path('init.sql').read_text(), 'params': []})
+    storage_version = os.environ.get('STATE_STORAGE_VERSION', '1')
+    if storage_version not in ('1', '2'):
+        raise SystemExit('Unsupported storage version')
+    if storage_version == '2':
+        versions = api(f'/accounts/{account}/d1/database/{database_id}/query', 'POST', {'sql': 'SELECT version FROM storage_versions WHERE id=1', 'params': []})
+        if not versions or not versions[0].get('results') or versions[0]['results'][0].get('version') != 2:
+            raise SystemExit('Schema2 requires explicit validated migration, including for an empty installation')
+    namespaces = api(f'/accounts/{account}/storage/kv/namespaces?per_page=1000')
+    found = [item for item in namespaces if item['title'] == snapshot_namespace]
+    if len(found) > 1:
+        raise SystemExit('Duplicate public snapshot namespace names')
+    namespace = found[0] if found else api(f'/accounts/{account}/storage/kv/namespaces', 'POST', {'title': snapshot_namespace})
     schema_state.parent.mkdir(exist_ok=True)
-    schema_state.write_text(json.dumps({'changed': schema_changed, 'database_id': database_id, 'schema_hash': schema_hash}))
-    kv_binding = previous_config.get('kv_namespaces', {}).get('UPTIMEFLARE_PUBLIC_KV')
-    if os.environ.get('PUBLIC_KV_ENABLED') == '1' and not kv_binding:
-        namespaces = api(f'/accounts/{account}/storage/kv/namespaces?per_page=1000')
-        found = [item for item in namespaces if item['title'] == snapshot_namespace]
-        if len(found) > 1:
-            raise SystemExit('Duplicate public snapshot namespace names')
-        namespace = found[0] if found else api(f'/accounts/{account}/storage/kv/namespaces', 'POST', {'title': snapshot_namespace})
-        kv_binding = {'namespace_id': namespace['id']}
-    secret_bindings = {}
-    for key in ['PROBE_TOKENS', 'ADMIN_PASSWORD', 'ADMIN_SESSION_SECRET']:
-        value = os.environ.get(key)
-        if not value:
-            raise SystemExit(f'Missing {key}')
-        secret_bindings[key] = {'type': 'secret_text', 'value': value}
-    config = {
-        'compatibility_date': '2025-04-02',
-        'compatibility_flags': ['nodejs_compat'],
-        'd1_databases': {'UPTIMEFLARE_D1': {'id': database_id}},
-        'env_vars': {**secret_bindings, 'UPTIMEFLARE_SCHEMA_HASH': {'type': 'plain_text', 'value': schema_hash}},
-    }
-    if kv_binding:
-        config['kv_namespaces'] = {'UPTIMEFLARE_PUBLIC_KV': kv_binding}
-    if existing:
-        api(path, 'PATCH', {'deployment_configs': {'production': config}})
-    else:
-        api(f'/accounts/{account}/pages/projects', 'POST', {
-            'name': project, 'production_branch': 'main',
-            'deployment_configs': {'production': config},
-        })
+    schema_state.write_text(json.dumps({'database_id': database_id, 'schema_hash': schema_hash, 'version': storage_version}))
+    # Paths are relative to worker/wrangler.deploy.json. Domain takeover is a separate explicit phase.
     Path('worker/wrangler.deploy.json').write_text(json.dumps({
         'name': worker, 'main': 'src/index.ts', 'account_id': account,
         'compatibility_date': '2025-04-02', 'compatibility_flags': ['nodejs_compat'],
+        'assets': {'directory': '../out', 'binding': 'ASSETS', 'run_worker_first': True, 'not_found_handling': '404-page'},
         'd1_databases': [{'binding': 'UPTIMEFLARE_D1', 'database_name': database, 'database_id': database_id, 'migrations_dir': '../migrations'}],
-        'durable_objects': {'bindings': [{'name': 'REMOTE_CHECKER_DO', 'class_name': 'RemoteChecker'}]},
-        'migrations': [{'tag': 'v1', 'new_sqlite_classes': ['RemoteChecker']}],
-        'triggers': {'crons': ['* * * * *']},
-        'observability': {'enabled': True},
-        **({'kv_namespaces': [{'binding': 'UPTIMEFLARE_PUBLIC_KV', 'id': kv_binding['namespace_id']}]} if kv_binding else {}),
+        'kv_namespaces': [{'binding': 'UPTIMEFLARE_PUBLIC_KV', 'id': namespace['id']}],
+        'durable_objects': {'bindings': [{'name': 'REMOTE_CHECKER_DO', 'class_name': 'RemoteChecker'}, {'name': 'COORDINATOR_DO', 'class_name': 'Coordinator'}]},
+        'migrations': [{'tag': 'v1', 'new_sqlite_classes': ['RemoteChecker']}, {'tag': 'v2', 'new_sqlite_classes': ['Coordinator']}],
+        'vars': {'STATE_STORAGE_VERSION': storage_version, 'METRICS_ENABLED': os.environ.get('METRICS_ENABLED', '0'), 'MIGRATION_MODE': os.environ.get('MIGRATION_MODE', '0')},
+        'triggers': {'crons': ['* * * * *']}, 'observability': {'enabled': True},
     }, indent=2) + '\n')
-    print(f'Prepared D1 {database} and Pages {project}')
+    print(f'Prepared unified Worker {worker}, shared D1 and public KV (storage version {storage_version})')
 else:
     domain = os.environ.get('STATUS_DOMAIN', '')
     if not domain:
-        print('No custom domain configured; using pages.dev')
+        print('No custom domain configured; using workers.dev')
         raise SystemExit(0)
-    path = f'/accounts/{account}/pages/projects/{project}/domains'
-    if not any(item['name'] == domain for item in api(path)):
-        api(path, 'POST', {'name': domain})
     zone_name = os.environ.get('DNS_ZONE', '')
-    if zone_name:
-        zones = api('/zones?name=' + urllib.parse.quote(zone_name))
-        if len(zones) != 1 or zones[0]['account']['id'] != account:
-            raise SystemExit('DNS zone does not uniquely belong to deployment account')
-        zone = zones[0]['id']
-        records = api(f'/zones/{zone}/dns_records?name=' + urllib.parse.quote(domain))
-        target = project + '.pages.dev'
-        if not records:
-            api(f'/zones/{zone}/dns_records', 'POST', {'type': 'CNAME', 'name': domain, 'content': target, 'proxied': True, 'ttl': 1})
-        elif len(records) != 1 or records[0]['type'] != 'CNAME' or records[0]['content'] != target:
-            raise SystemExit('Existing DNS record points elsewhere; resolve the conflict before deployment')
-    print(f'Custom domain configured: {domain}')
+    zones = api('/zones?name=' + urllib.parse.quote(zone_name))
+    if len(zones) != 1 or zones[0]['account']['id'] != account:
+        raise SystemExit('DNS zone does not uniquely belong to deployment account')
+    zone = zones[0]['id']
+    # Require deliberate removal of a previous Pages custom domain before changing its origin.
+    pages_domains = api(f'/accounts/{account}/pages/projects/{project}/domains', missing=True) or []
+    if any(item['name'] == domain for item in pages_domains):
+        raise SystemExit('Remove the old Pages custom domain in the approved cutover window, then retry domain binding')
+    existing = api(f'/accounts/{account}/workers/domains')
+    conflicts = [item for item in existing if item.get('hostname') == domain and item.get('service') != worker]
+    if conflicts:
+        raise SystemExit('Custom domain belongs to another Worker; resolve the conflict first')
+    api(f'/accounts/{account}/workers/domains', 'PUT', {'hostname': domain, 'service': worker, 'environment': 'production', 'zone_id': zone})
+    print(f'Unified Worker custom domain configured: {domain}')

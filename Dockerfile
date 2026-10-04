@@ -14,7 +14,7 @@ RUN cd worker && npm ci --no-audit --no-fund
 COPY . .
 
 # Build the Next.js application
-RUN npx --no-install @cloudflare/next-on-pages
+RUN npm run build && npm run build:worker
 
 # Stage 2: Production
 FROM node:22-bookworm-slim AS production
@@ -31,7 +31,7 @@ RUN chmod +x /entrypoint.sh
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 WRANGLER_SEND_METRICS=false
 
-# Expose the Pages port
+# Expose the unified Worker port
 EXPOSE 8788
 VOLUME ["/app/.wrangler/state"]
 STOPSIGNAL SIGTERM

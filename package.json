@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "build:worker": "wrangler deploy --dry-run --config worker/wrangler.toml --outdir .deployment/unified-worker"
+    "build:worker": "node scripts/build-worker.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",

@@ -4,8 +4,8 @@ umask 077
 
 APP_DIR=${UPTIMEFLARE_APP_DIR:-/app}
 STATE_DIR=${UPTIMEFLARE_STATE_DIR:-$APP_DIR/.wrangler/state}
-WORKER_PORT=${UPTIMEFLARE_WORKER_PORT:-8787}
-PAGES_PORT=${UPTIMEFLARE_PAGES_PORT:-8788}
+WORKER_PORT=${UPTIMEFLARE_PORT:-${UPTIMEFLARE_PAGES_PORT:-8788}}
+PAGES_PORT=$WORKER_PORT
 LISTEN_IP=${UPTIMEFLARE_LISTEN_IP:-0.0.0.0}
 LOCAL_PROTOCOL=${UPTIMEFLARE_LOCAL_PROTOCOL:-http}
 RUNTIME_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uptimeflare-runtime.XXXXXX")
@@ -57,44 +57,40 @@ function quote(value) {
 const registry=JSON.stringify(tokens).replace(/'/g,'\\u0027');
 const lines={PROBE_TOKENS:registry,ADMIN_PASSWORD:password,ADMIN_SESSION_SECRET:session};
 fs.writeFileSync(path.join(runtime,'.dev.vars'),Object.entries(lines).map(([key,value])=>`${key}=${quote(value)}`).join('\n')+'\n',{mode:0o600});
+const version=process.env.UPTIMEFLARE_STATE_VERSION ?? '1'; if (!['1','2'].includes(version)) throw new Error('Invalid local storage version');
 const common={compatibility_date:'2025-04-02',compatibility_flags:['nodejs_compat'],d1_databases:[{binding:'UPTIMEFLARE_D1',database_name:'uptimeflare_d1',database_id:'00000000-0000-0000-0000-000000000000'}]};
-fs.writeFileSync(path.join(runtime,'worker.json'),JSON.stringify({...common,name:'uptimeflare-local-worker',main:path.join(app,'worker/src/index.ts'),durable_objects:{bindings:[{name:'REMOTE_CHECKER_DO',class_name:'RemoteChecker'}]},migrations:[{tag:'v1',new_sqlite_classes:['RemoteChecker']}],triggers:{crons:['* * * * *']}}));
-fs.writeFileSync(path.join(runtime,'wrangler.json'),JSON.stringify({...common,name:'uptimeflare-local-pages',pages_build_output_dir:path.join(app,'.vercel/output/static')}));
+fs.writeFileSync(path.join(runtime,'worker.json'),JSON.stringify({...common,name:'uptimeflare-local',main:path.join(app,'worker/src/index.ts'),assets:{directory:path.join(app,'out'),binding:'ASSETS',run_worker_first:true,not_found_handling:'404-page'},kv_namespaces:[{binding:'UPTIMEFLARE_PUBLIC_KV',id:'00000000000000000000000000000001'}],durable_objects:{bindings:[{name:'REMOTE_CHECKER_DO',class_name:'RemoteChecker'},{name:'COORDINATOR_DO',class_name:'Coordinator'}]},migrations:[{tag:'v1',new_sqlite_classes:['RemoteChecker']},{tag:'v2',new_sqlite_classes:['Coordinator']}],vars:{STATE_STORAGE_VERSION:version,METRICS_ENABLED:'0'},triggers:{crons:['* * * * *']}}));
 JS
 
 mkdir -p "$STATE_DIR"
 STATE_DIR=$(cd "$STATE_DIR" && pwd)
 WRANGLER="$APP_DIR/node_modules/wrangler/bin/wrangler.js"
-if [[ ! -f "$APP_DIR/.vercel/output/static/_worker.js/index.js" || ! -f "$WRANGLER" ]]; then
-  echo "Build Pages and install dependencies before starting local deployment." >&2
+if [[ ! -f "$APP_DIR/out/index.html" || ! -f "$WRANGLER" ]]; then
+  echo "Build static assets and install dependencies before starting local deployment." >&2
   exit 1
 fi
 
 echo "Initializing local shared D1 schema..."
 node "$WRANGLER" d1 execute uptimeflare_d1 --config "$RUNTIME_DIR/worker.json" --local --persist-to "$STATE_DIR" --file "$APP_DIR/init.sql" --yes --json >/dev/null
 
-echo "Starting local Worker and Pages..."
+echo "Starting local unified Worker..."
 (cd "$APP_DIR/worker" && exec node "$WRANGLER" dev --config "$RUNTIME_DIR/worker.json" --local --test-scheduled --persist-to "$STATE_DIR" --ip "$LISTEN_IP" --port "$WORKER_PORT" --inspector-port 0 --local-protocol "$LOCAL_PROTOCOL" --log-level error) &
 CHILD_PIDS+=("$!")
-# Pages rejects --config; discover the private wrangler.json from its own cwd.
-(cd "$RUNTIME_DIR" && exec node "$WRANGLER" pages dev --persist-to "$STATE_DIR" --ip "$LISTEN_IP" --port "$PAGES_PORT" --inspector-port 0 --local-protocol "$LOCAL_PROTOCOL" --log-level error) &
-CHILD_PIDS+=("$!")
 
-CURL_TLS=()
-if [[ "$LOCAL_PROTOCOL" == https ]]; then CURL_TLS=(-k); fi
+CURL_COMMAND=(curl)
+if [[ "$LOCAL_PROTOCOL" == https ]]; then CURL_COMMAND+=(-k); fi
 WORKER_URL="$LOCAL_PROTOCOL://127.0.0.1:$WORKER_PORT"
 PAGES_URL="$LOCAL_PROTOCOL://127.0.0.1:$PAGES_PORT"
 ready=false
 for ignored in $(seq 1 60); do
   for pid in "${CHILD_PIDS[@]}"; do if ! kill -0 "$pid" 2>/dev/null; then echo "A local runtime exited during startup." >&2; exit 1; fi; done
-  worker_status=$(curl "${CURL_TLS[@]}" -s -o /dev/null -w '%{http_code}' --max-time 2 "$WORKER_URL/api/admin/config" || true)
-  pages_status=$(curl "${CURL_TLS[@]}" -s -o /dev/null -w '%{http_code}' --max-time 2 "$PAGES_URL/api/admin/config" || true)
-  if [[ "$worker_status" == 401 && "$pages_status" == 401 ]]; then ready=true; break; fi
+  worker_status=$("${CURL_COMMAND[@]}" -s -o /dev/null -w '%{http_code}' --max-time 2 "$WORKER_URL/api/admin/config" || true)
+  if [[ "$worker_status" == 401 ]]; then ready=true; break; fi
   sleep 1
  done
 if ! $ready; then echo "Local runtimes did not become ready within 60 attempts." >&2; exit 1; fi
 
-echo "Pages ready on port $PAGES_PORT; shared D1 persisted at $STATE_DIR"
+echo "Unified Worker ready on port $WORKER_PORT; D1 persisted at $STATE_DIR"
 # One sequential loop awaits each scheduled invocation before the next minute.
 # There is no cron daemon and no overlapping curl process.
 schedule_loop() (
@@ -102,7 +98,7 @@ schedule_loop() (
   task_pid=''
   trap 'if [[ -n "$task_pid" ]]; then kill -TERM "$task_pid" 2>/dev/null || true; wait "$task_pid" 2>/dev/null || true; fi; exit 0' INT TERM
   while true; do
-    curl "${CURL_TLS[@]}" --fail --silent --show-error --connect-timeout 2 --max-time 900 "$WORKER_URL/__scheduled" >/dev/null &
+    "${CURL_COMMAND[@]}" --fail --silent --show-error --connect-timeout 2 --max-time 900 "$WORKER_URL/__scheduled" >/dev/null &
     task_pid=$!
     if ! wait "$task_pid"; then echo "Local scheduled invocation failed; retrying at the next minute." >&2; fi
     sleep "$((60-$(date +%s)%60))" &

@@ -9,11 +9,11 @@ concurrency:
   group: cloudflare-production
   cancel-in-progress: false
 jobs:
-  deploy:
+  verify:
     runs-on: ubuntu-latest
     env:
       PAGES_PROJECT: uptimeflare-distributed
-      WORKER_NAME: uptimeflare-distributed-worker
+      WORKER_NAME: uptimeflare-distributed
       D1_DATABASE: uptimeflare-distributed-d1
       STATUS_DOMAIN: status.catxxp123.top
       DNS_ZONE: catxxp123.top
@@ -34,14 +34,48 @@ jobs:
         working-directory: worker
       - run: node --test util/*.test.cjs
       - run: npm run lint
-      - run: npx --no-install @cloudflare/next-on-pages
-      - name: Verify management API in the Pages deployment artifact
+      - run: npm run build
+      - run: npm run build:worker
+      - name: Verify management API in the unified Worker artifact
         run: node scripts/management-smoke.mjs
-      - name: Verify dashboard scale and lazy history in the Pages deployment artifact
+      - name: Verify dashboard scale and lazy history in the unified Worker artifact
         run: node scripts/dashboard-smoke.mjs
       - name: Verify public cached dashboard without D1 and authentication boundaries
         run: node scripts/public-cache-smoke.mjs
-      - name: Prepare shared D1, Pages bindings and deployment config
+      - name: Verify real Coordinator and regional DO RPC, replay and reconstruction
+        run: node scripts/coordinator-smoke.mjs
+      - run: python3 -m unittest discover -s deploy -p 'test_state_v2.py'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unified-static-assets
+          path: out/
+          include-hidden-files: true
+  deploy:
+    needs: verify
+    if: vars.UNIFIED_DEPLOY_APPROVED == '1'
+    runs-on: ubuntu-latest
+    env:
+      PAGES_PROJECT: uptimeflare-distributed
+      WORKER_NAME: uptimeflare-distributed
+      D1_DATABASE: uptimeflare-distributed-d1
+      STATUS_DOMAIN: status.catxxp123.top
+      DNS_ZONE: catxxp123.top
+      UNIFIED_DEPLOY_APPROVED: '1'
+      STATE_STORAGE_VERSION: ${{ vars.STATE_STORAGE_VERSION || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+        working-directory: worker
+      - uses: actions/download-artifact@v4
+        with:
+          name: unified-static-assets
+          path: out/
+      - name: Prepare unified bindings and deployment config
         run: python3 deploy/provision.py prepare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -71,16 +105,6 @@ jobs:
           PROBE_TOKENS: ${{ secrets.PROBE_TOKENS }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           ADMIN_SESSION_SECRET: ${{ secrets.ADMIN_SESSION_SECRET }}
-      - name: Publish production Pages
-        run: npx --no-install wrangler pages deploy .vercel/output/static --project-name "$PAGES_PROJECT" --branch main --commit-dirty=true
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Reconcile daily history after producer deployment
-        run: python3 deploy/provision.py reconcile
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Bind status domain
         run: python3 deploy/provision.py domain
         env:

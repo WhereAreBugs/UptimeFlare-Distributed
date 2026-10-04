@@ -2,7 +2,6 @@ import type { NextRequest } from 'next/server'
 import { workerConfig } from '@/uptime.config'
 import { getRuntimeConfig } from '@/worker/src/settings'
 import { handleProbeRequest, preflightProbeRequest } from '@/worker/src/probes'
-import { getOptionalRequestContext } from '@cloudflare/next-on-pages'
 
 export const runtime = 'edge'
 
@@ -14,6 +13,6 @@ export default async function handler(request: NextRequest): Promise<Response> {
     request,
     process.env as any,
     config.monitors,
-    getOptionalRequestContext()?.cf
+    (request as NextRequest & { cf?: IncomingRequestCfProperties }).cf
   )
 }
