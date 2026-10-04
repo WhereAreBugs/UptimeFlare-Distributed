@@ -11,7 +11,9 @@ import { getSettings, type EditableSettings } from './settings'
 import { CLOUDFLARE_PROBE_ID } from './probe-labels'
 import { validatePage, validateMaintenances, validateNotificationDefaults, PresentationInputError } from './presentation'
 import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
-import { pauseTransitionStatements } from './pause'
+import { ensureGroupIds, updatedGroupIds, GroupInputError } from './groups'
+import { saveConfiguration } from './configuration-write'
+import { handleAdminTokens } from './management'
 
 export interface AdminEnv extends ProbeEnv {
   ADMIN_PASSWORD?: string
@@ -438,12 +440,18 @@ export async function handleAdminRequest(
   )
     return json({ error: '管理登录尚未配置' }, 503)
   const path = new URL(request.url).pathname
-  const allowed = path === '/api/admin/config' ? ['GET', 'PUT'] : ['POST']
+  const allowed = path === '/api/admin/config' ? ['GET', 'PUT']
+    : path === '/api/admin/tokens' ? ['GET', 'POST']
+    : /^\/api\/admin\/tokens\/[a-f0-9-]{36}$/.test(path) ? ['DELETE']
+    : ['/api/admin/login', '/api/admin/logout'].includes(path) ? ['POST'] : []
+  if (!allowed.length) return json({ error: 'Not found' }, 404)
   if (!allowed.includes(request.method))
     return json({ error: 'Method not allowed' }, 405, { Allow: allowed.join(', ') })
   // All writes, including login, require same-origin browser requests; no CORS exposure.
   if (request.method !== 'GET' && request.headers.get('Origin') !== new URL(request.url).origin)
     return json({ error: '跨站请求被拒绝' }, 403)
+  const authorization = request.headers.get('Authorization')
+  if (authorization !== null && !/^Basic /i.test(authorization)) return json({ error: '请使用管理员登录会话' }, 401)
   try {
     if (path === '/api/admin/login') {
       const address = request.headers.get('CF-Connecting-IP') ?? 'local'
@@ -475,44 +483,29 @@ export async function handleAdminRequest(
     if (!(await authenticated(request, env))) return json({ error: '请先登录' }, 401)
     if (path === '/api/admin/logout')
       return json({ ok: true }, 200, { 'Set-Cookie': cookie('', 0) })
+    if (path.startsWith('/api/admin/tokens')) return await handleAdminTokens(request, env, fallback)
     if (path !== '/api/admin/config') return json({ error: 'Not found' }, 404)
-    if (request.method === 'GET') return json(await getSettings(env, fallback))
+    if (request.method === 'GET') {
+      await ensureGroupIds(env, fallback)
+      return json(await getSettings(env, fallback))
+    }
     const data = await readJSON(request)
     if (!Number.isSafeInteger(data.revision) || data.revision < 0)
       return json({ error: '配置版本无效' }, 400)
     const registered = new Set(Object.keys(JSON.parse(env.PROBE_TOKENS ?? '{}')))
     const settings = validateSettings(data, registered)
+    await ensureGroupIds(env, fallback)
     const previous = await getSettings(env, fallback)
-    const priorMonitors = new Map(previous.monitors.map(monitor => [monitor.id, monitor]))
-    const transitions = settings.monitors.flatMap(monitor => {
-      const prior = priorMonitors.get(monitor.id)
-      return !!monitor.paused !== !!prior?.paused
-        ? [{ id: monitor.id, paused: !!monitor.paused, native: !monitor.probes?.length || (!!prior && !prior.probes?.length) }]
-        : []
-    })
-    const now = Math.floor(Date.now() / 1000)
-    // The private nonce gates all transition effects to this successful CAS, including equal-body races.
-    const writeId = crypto.randomUUID()
-    const statement = env.UPTIMEFLARE_D1.prepare(
-      'INSERT INTO admin_config (id, revision, value, updated_at) SELECT 1, ?, ?, ? WHERE ? = 0 OR EXISTS (SELECT 1 FROM admin_config WHERE id = 1) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, value = excluded.value, updated_at = excluded.updated_at WHERE admin_config.revision = excluded.revision - 1'
-    )
-      .bind(
-        data.revision + 1,
-        JSON.stringify({ ...settings, _writeId: writeId }),
-        now,
-        data.revision
-      )
-    const guard = `EXISTS (SELECT 1 FROM admin_config WHERE id=1 AND revision=${data.revision + 1} AND json_extract(value,'$._writeId')='${writeId}')`
-    const results = await env.UPTIMEFLARE_D1.batch([
-      statement,
-      ...pauseTransitionStatements(env, transitions, now, guard),
-    ])
-    if (results.some(result => !result.success)) throw new Error('Configuration persistence failed')
-    if (!results[0].meta.changes) return json({ error: '配置已被其他窗口修改，请重新加载后保存' }, 409)
+    const groupIds = updatedGroupIds(settings.page, previous.groupIds, data.groupRenames, data.groupIds)
+    const identityGuard = data.groupIds === undefined
+      ? 'NOT EXISTS(SELECT 1 FROM management_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at>unixepoch()))'
+      : '1'
+    if (!(await saveConfiguration(env, { ...settings, _groupIds: groupIds }, data.revision, previous.monitors, identityGuard)))
+      return json({ error: '配置已被其他窗口修改，请重新加载后保存' }, 409)
     return json(await getSettings(env, fallback))
   } catch (error) {
     // Never echo D1 errors, SQL, configured targets, passwords or request contents.
-    if (error instanceof AdminInputError || error instanceof PresentationInputError) return json({ error: error.message }, 400)
+    if (error instanceof AdminInputError || error instanceof PresentationInputError || error instanceof GroupInputError) return json({ error: error.message }, 400)
     return json({ error: '配置服务暂时不可用' }, 503)
   }
 }

@@ -5,7 +5,7 @@
 
 # UptimeFlare Distributed
 
-This distributed edition supports independent [Go probes](https://github.com/WhereAreBugs/UptimeFlare-Distributed-prober), durable compressed batch ingestion, expandable multi-probe summaries, and authenticated web configuration at `/admin`. It is based on [UptimeFlare](https://github.com/lyc8503/UptimeFlare). See [external probe setup](docs/external-probes.md).
+This distributed edition supports independent [Go probes](https://github.com/WhereAreBugs/UptimeFlare-Distributed-prober), durable compressed batch ingestion, expandable multi-probe summaries, and authenticated web configuration at `/admin`. Administrators can create scoped management tokens to query status and enable or disable monitors within authorized groups; see the [management API](docs/management-api.md). It is based on [UptimeFlare](https://github.com/lyc8503/UptimeFlare). See [external probe setup](docs/external-probes.md).
 
 A more advanced, serverless, and free uptime monitoring & status page solution, powered by Cloudflare Workers, complete with a user-friendly interface.
 

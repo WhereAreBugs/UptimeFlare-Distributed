@@ -2,16 +2,17 @@ import type { WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { getProbeDefinitions } from './probe-labels'
 import { pageConfig, maintenances } from '../../uptime.config'
+import { projectGroupIds } from './groups'
 
 export type EditableSettings = Pick<WorkerConfig, 'monitors' | 'probes' | 'notificationTemplates' | 'page' | 'maintenances' | 'notification'>
-export type StoredSettings = EditableSettings & { revision: number }
+export type StoredSettings = EditableSettings & { revision: number; groupIds: Record<string, string> }
 
 /** Read once per request; D1 is the authoritative source after the first admin save. */
 export async function getSettings(env: ProbeEnv, fallback: WorkerConfig): Promise<StoredSettings> {
   const row = await env.UPTIMEFLARE_D1.prepare(
     'SELECT revision, value FROM admin_config WHERE id = 1'
   ).first<{ revision: number; value: string }>()
-  const settings: StoredSettings = row
+  const settings = row
     ? { ...JSON.parse(row.value), revision: row.revision }
     : {
         revision: 0,
@@ -21,6 +22,7 @@ export async function getSettings(env: ProbeEnv, fallback: WorkerConfig): Promis
       }
   return {
     revision: settings.revision,
+    groupIds: projectGroupIds(settings.page ?? fallback.page ?? pageConfig, settings._groupIds),
     monitors: settings.monitors,
     notificationTemplates: settings.notificationTemplates ?? [],
     page: settings.page ?? fallback.page ?? pageConfig,

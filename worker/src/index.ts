@@ -11,6 +11,7 @@ import { handleAdminRequest } from './admin'
 import { runCloudflareProbe } from './cloudflare-probe'
 import { MAX_SCHEDULED_TARGETS_PER_CRON } from './limits'
 import { runNotifications } from './notifications'
+import { handleManagementRequest } from './management'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
@@ -24,6 +25,8 @@ const Worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (new URL(request.url).pathname.startsWith('/api/admin/'))
       return handleAdminRequest(request, env, fallbackConfig)
+    if (new URL(request.url).pathname.startsWith('/api/manage/'))
+      return handleManagementRequest(request, env, fallbackConfig)
     const workerConfig = await getRuntimeConfig(env, fallbackConfig)
     return handleProbeRequest(
       request,

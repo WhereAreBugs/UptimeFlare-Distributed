@@ -31,6 +31,8 @@ import PageSettingsEditor from '@/components/PageSettingsEditor'
 import MonitorGroupsEditor, { applyGroupDraftNames } from '@/components/MonitorGroupsEditor'
 import MaintenancePlansEditor from '@/components/MaintenancePlansEditor'
 import NotificationDefaultsEditor from '@/components/NotificationDefaultsEditor'
+import ManagementTokenEditor from '@/components/ManagementTokenEditor'
+import { renamedSavedGroupIds, savedGroupRenames } from '@/util/management-token-ui'
 import { createInternalId } from '@/util/internal-id'
 import {
   DEFAULT_MONITOR_INTERVAL_SECONDS,
@@ -59,7 +61,10 @@ function optionLabels<T extends { id: string }>(
   })
 }
 
-type Config = StoredSettings & { probes: NonNullable<StoredSettings['probes']> }
+type Config = StoredSettings & {
+  probes: NonNullable<StoredSettings['probes']>
+  groupIds?: Record<string, string>
+}
 async function api(path: string, method = 'GET', body?: unknown) {
   const response = await fetch(`/api/admin/${path}`, {
     method,
@@ -68,7 +73,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
-  const result: any = await response.json()
+  const result: any = response.status === 204 ? {} : await response.json()
   if (!response.ok) {
     const error = new Error(result.error ?? '请求失败') as Error & { status: number }
     error.status = response.status
@@ -88,6 +93,8 @@ export default function Admin() {
   const [webhookDrafts, setWebhookDrafts] = useState<Record<string, WebhookDraft>>({})
   const [activeTab, setActiveTab] = useState<string | null>('monitors')
   const [groupDraftNames, setGroupDraftNames] = useState<Record<string, string>>({})
+  const [tokenRefreshVersion, setTokenRefreshVersion] = useState(0)
+  const [tokenBusy, setTokenBusy] = useState(false)
   const monitorOptions = optionLabels(
     config?.monitors ?? [],
     (monitor) => monitor.name || '未命名目标'
@@ -98,6 +105,7 @@ export default function Admin() {
     setAdvanced({})
     setWebhookDrafts({})
     setGroupDraftNames({})
+    setTokenRefreshVersion((value) => value + 1)
   }
   useEffect(() => {
     load()
@@ -203,11 +211,24 @@ export default function Admin() {
       ...config.page,
       group: applyGroupDraftNames(config.page?.group ?? {}, groupDraftNames),
     }
-    const saved = await api('config', 'PUT', { ...config, monitors, notificationTemplates, page })
+    const groupRenames = savedGroupRenames(
+      config.page?.group ?? {},
+      config.groupIds ?? {},
+      groupDraftNames
+    )
+    const saved = await api('config', 'PUT', {
+      ...config,
+      monitors,
+      notificationTemplates,
+      page,
+      groupRenames,
+      groupIds: renamedSavedGroupIds(page.group, config.groupIds ?? {}, groupRenames),
+    })
     setConfig(saved)
     setAdvanced({})
     setWebhookDrafts({})
     setGroupDraftNames({})
+    setTokenRefreshVersion((value) => value + 1)
     setMessage('已保存到 D1。探针通常在 5 分钟内获取新配置。')
   }
   return (
@@ -223,7 +244,7 @@ export default function Admin() {
             {config && (
               <Button
                 variant="subtle"
-                disabled={busy}
+                disabled={busy || tokenBusy}
                 onClick={() =>
                   void action(async () => {
                     await api('logout', 'POST')
@@ -239,6 +260,7 @@ export default function Admin() {
               href="/"
               variant="default"
               leftSection={<IconArrowLeft size={16} />}
+              disabled={tokenBusy}
             >
               返回
             </Button>
@@ -287,20 +309,50 @@ export default function Admin() {
           <Stack>
             <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
               <Tabs.List grow aria-label="配置板块">
-                <Tabs.Tab value="monitors">监控目标</Tabs.Tab>
-                <Tabs.Tab value="probes">探针</Tabs.Tab>
-                <Tabs.Tab value="notifications">通知</Tabs.Tab>
-                <Tabs.Tab value="groups">分组</Tabs.Tab>
-                <Tabs.Tab value="maintenances">维护计划</Tabs.Tab>
-                <Tabs.Tab value="page">页面设置</Tabs.Tab>
+                <Tabs.Tab value="monitors" disabled={tokenBusy}>
+                  监控目标
+                </Tabs.Tab>
+                <Tabs.Tab value="probes" disabled={tokenBusy}>
+                  探针
+                </Tabs.Tab>
+                <Tabs.Tab value="notifications" disabled={tokenBusy}>
+                  通知
+                </Tabs.Tab>
+                <Tabs.Tab value="groups" disabled={tokenBusy}>
+                  分组
+                </Tabs.Tab>
+                <Tabs.Tab value="maintenances" disabled={tokenBusy}>
+                  维护计划
+                </Tabs.Tab>
+                <Tabs.Tab value="page" disabled={tokenBusy}>
+                  页面设置
+                </Tabs.Tab>
+                <Tabs.Tab value="tokens">管理 Token</Tabs.Tab>
               </Tabs.List>
+              <Tabs.Panel value="tokens" pt="md">
+                <ManagementTokenEditor
+                  request={api}
+                  refreshVersion={tokenRefreshVersion}
+                  disabled={busy}
+                  onBusyChange={setTokenBusy}
+                  onOpenGroups={() => setActiveTab('groups')}
+                />
+              </Tabs.Panel>
               <Tabs.Panel value="groups" pt="md">
                 <MonitorGroupsEditor
                   value={config.page?.group ?? {}}
                   monitorOptions={monitorOptions}
                   draftNames={groupDraftNames}
                   onChange={(group) => {
-                    setConfig({ ...config, page: { ...config.page, group } })
+                    setConfig({
+                      ...config,
+                      page: { ...config.page, group },
+                      groupIds: Object.fromEntries(
+                        Object.entries(config.groupIds ?? {}).filter(([name]) =>
+                          Object.hasOwn(group, name)
+                        )
+                      ),
+                    })
                     setGroupDraftNames((old) =>
                       Object.fromEntries(
                         Object.entries(old).filter(([key]) => Object.hasOwn(group, key))
@@ -794,9 +846,11 @@ export default function Admin() {
                 </Stack>
               </Tabs.Panel>
             </Tabs>
-            <Button size="md" loading={busy} onClick={() => void action(save)}>
-              保存配置
-            </Button>
+            {activeTab !== 'tokens' && (
+              <Button size="md" loading={busy} onClick={() => void action(save)}>
+                保存配置
+              </Button>
+            )}
           </Stack>
         )}
       </Container>

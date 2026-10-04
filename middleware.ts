@@ -6,7 +6,10 @@ export async function middleware(request: NextRequest) {
   // These exact routes enforce independent bearer authentication in their handlers.
   if (
     request.nextUrl.pathname === '/api/probes/config' ||
-    request.nextUrl.pathname === '/api/probes/ingest'
+    request.nextUrl.pathname === '/api/probes/ingest' ||
+    /^\/api\/manage\/(?:groups|status|(?:groups|monitors)\/[^/]+\/(?:status|enable|disable))$/.test(
+      request.nextUrl.pathname
+    )
   )
     return
   const passwordProtection = workerConfig.passwordProtection
