@@ -1,9 +1,8 @@
 import { workerConfig as fallbackConfig } from '@/uptime.config'
-import { getPresentationSettings, expandMaintenances } from '@/util/maintenance'
+import { expandMaintenances } from '@/util/maintenance'
 import { NextRequest } from 'next/server'
-import { CompactedMonitorStateWrapper, getPublicNativeState } from '@/worker/src/store'
-import { getRuntimeConfig } from '@/worker/src/settings'
-import { getProbeDashboardSummaries } from '@/worker/src/probes'
+import { CompactedMonitorStateWrapper } from '@/worker/src/store'
+import { getPublicDashboard } from '@/worker/src/public-dashboard'
 import { parseNativeDiagnostic } from '@/worker/src/diagnostics'
 import { getMonitorStaleAfterSeconds } from '@/util/monitor-settings'
 import { getMonitorCategory } from '@/util/dashboard-status'
@@ -25,23 +24,21 @@ export default async function handler(req: NextRequest): Promise<Response> {
       status: 405,
       headers: { ...headers, Allow: 'GET, OPTIONS' },
     })
-  const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
-  const [stateStr, probeSummaries] = await Promise.all([
-    getPublicNativeState(process.env as any, workerConfig.monitors),
-    getProbeDashboardSummaries(
-      process.env as any,
-      workerConfig.monitors,
-      workerConfig.probes,
-      Math.round(Date.now() / 1000)
-    ),
-  ])
+  let dashboard
+  try {
+    dashboard = await getPublicDashboard(process.env as any, fallbackConfig)
+  } catch {
+    return new Response(JSON.stringify({ error: 'Public dashboard temporarily unavailable' }), {
+      status: 503,
+      headers,
+    })
+  }
+  const workerConfig = dashboard
+  const stateStr = dashboard.compactedStateStr
+  const probeSummaries = dashboard.probeSummaries
   const compactedState = new CompactedMonitorStateWrapper(stateStr)
   const now = Math.floor(Date.now() / 1000)
-  const maintenances = expandMaintenances(
-    getPresentationSettings(workerConfig).maintenances,
-    now - 86400,
-    now + 30 * 86400
-  )
+  const maintenances = expandMaintenances(dashboard.maintenances, now - 86400, now + 30 * 86400)
 
   if (
     compactedState.data.lastUpdate === 0 &&
@@ -146,6 +143,11 @@ export default async function handler(req: NextRequest): Promise<Response> {
     updatedAt,
     monitors,
     maintenances,
+    snapshotAt: dashboard.snapshotAt,
+    snapshotIncomplete: dashboard.snapshotIncomplete,
+    stale: dashboard.stale,
+    source: dashboard.source,
+    configRevision: dashboard.configRevision,
   }
 
   return new Response(JSON.stringify(ret), {

@@ -7,6 +7,7 @@ import {
   getProbeSummaries,
   handleProbeRequest,
   MAX_PROBE_BODY,
+  preflightProbeRequest,
 } from '../src/probes'
 import type { MonitorTarget } from '../../types/config'
 import type { ProbeEnv } from '../src/probes'
@@ -85,6 +86,50 @@ afterAll(async () => {
 })
 
 describe('authenticated probe contract', () => {
+  it('authenticates method/path/credentials before any settings/database access, including missing D1', async () => {
+    let reads = 0
+    const guarded = {
+      PROBE_TOKENS: JSON.stringify({ a: TOKEN_A }),
+      UPTIMEFLARE_D1: {
+        prepare() {
+          reads++
+          throw new Error('D1 must not be read')
+        },
+      },
+    } as unknown as ProbeEnv
+    for (const [path, method] of [
+      ['/api/probes/config', 'GET'],
+      ['/api/probes/ingest', 'POST'],
+    ]) {
+      const request = new Request(`https://status.test${path}`, { method })
+      expect(preflightProbeRequest(request, guarded)?.status).toBe(401)
+      expect((await handleProbeRequest(request, guarded, monitors)).status).toBe(401)
+    }
+    expect(
+      preflightProbeRequest(
+        new Request('https://status.test/api/probes/config', { method: 'POST' }),
+        guarded
+      )?.status
+    ).toBe(405)
+    expect(preflightProbeRequest(new Request('https://status.test/unknown'), guarded)?.status).toBe(
+      404
+    )
+    expect(
+      preflightProbeRequest(new Request('https://status.test/api/probes/config'), {
+        ...guarded,
+        PROBE_TOKENS: '{bad',
+      })?.status
+    ).toBe(503)
+    expect(
+      preflightProbeRequest(
+        new Request('https://status.test/api/probes/config', {
+          headers: { Authorization: `Bearer ${TOKEN_A}` },
+        }),
+        guarded
+      )
+    ).toBeNull()
+    expect(reads).toBe(0)
+  })
   it('returns only assigned targets and millisecond timeouts, converting headers to strings', async () => {
     const response = await handleProbeRequest(
       new Request('https://status.test/api/probes/config', {

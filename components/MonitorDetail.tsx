@@ -28,6 +28,7 @@ export default function MonitorDetail({
   now = Math.round(Date.now() / 1000),
   maintenances = fallbackMaintenances,
   nativeHistoryLoaded = true,
+  snapshotUnavailable = false,
 }: {
   monitor: MonitorTarget
   state: MonitorState
@@ -35,6 +36,7 @@ export default function MonitorDetail({
   now?: number
   maintenances?: MaintenanceConfig[]
   nativeHistoryLoaded?: boolean
+  snapshotUnavailable?: boolean
 }) {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -62,6 +64,7 @@ export default function MonitorDetail({
         summary={probeSummaries[monitor.id]}
         now={now}
         maintenances={maintenances}
+        snapshotUnavailable={snapshotUnavailable}
       />
     )
 
@@ -163,7 +166,7 @@ export default function MonitorDetail({
               <Badge color={categoryColors[category]} variant="light">
                 {t(categoryLabels[category])}
               </Badge>
-              {historyReady && (
+              {historyReady && !snapshotUnavailable && (
                 <Text fw={700} style={{ display: 'inline', color: getColor(uptimePercent, true) }}>
                   {t('Overall', { percent: uptimePercent })}
                 </Text>

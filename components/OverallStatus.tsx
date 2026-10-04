@@ -11,6 +11,8 @@ import {
   type MonitorCategory,
 } from '@/util/dashboard-status'
 import classes from '@/styles/OverallStatus.module.css'
+import PublicSnapshotNotice from './PublicSnapshotNotice'
+import type { PublicSnapshotMetadata } from '@/util/public-snapshot'
 
 export default function OverallStatus({
   maintenances,
@@ -18,12 +20,14 @@ export default function OverallStatus({
   aggregate,
   now,
   page = fallbackPageConfig,
+  snapshot,
 }: {
   maintenances: MaintenanceConfig[]
   monitors: MonitorTarget[]
   aggregate: DashboardCounts
   now: number
   page?: PageConfig
+  snapshot?: PublicSnapshotMetadata
 }) {
   const { t } = useTranslation('common')
   const category = dashboardCategory(aggregate)
@@ -63,6 +67,7 @@ export default function OverallStatus({
           })}
         </Text>
       )}
+      {snapshot && <PublicSnapshotNotice {...snapshot} />}
       {[
         { plans: active, upcoming: false },
         { plans: upcoming, upcoming: true },

@@ -72,6 +72,29 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
     '@/util/dashboard-status': dashboardModule.exports,
     '@/worker/src/diagnostics': diagnosticModule.exports,
     '@/worker/src/settings': { getRuntimeConfig: async () => workerConfig },
+    '@/worker/src/public-dashboard': {
+      getPublicDashboard: async () => {
+        const active = workerConfig.monitors.filter(
+          (monitor) => monitor.probes?.length && !monitor.paused
+        )
+        if (active.length) calls.probeReads++
+        if (workerConfig.monitors.some((monitor) => !monitor.paused && !monitor.probes?.length))
+          calls.nativeReads++
+        return {
+          ...workerConfig,
+          compactedStateStr: null,
+          probeSummaries: Object.fromEntries(
+            active.map((monitor) => [monitor.id, summaries[monitor.id]])
+          ),
+          maintenances: workerConfig.maintenances ?? [],
+          configRevision: 0,
+          snapshotAt: null,
+          snapshotIncomplete: false,
+          stale: false,
+          source: 'd1',
+        }
+      },
+    },
     '@/uptime.config': { workerConfig, maintenances: [] },
     '@/worker/src/probes': {
       getProbeIncidents: async () => {

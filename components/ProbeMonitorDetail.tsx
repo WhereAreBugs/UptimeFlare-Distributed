@@ -285,11 +285,13 @@ export default function ProbeMonitorDetail({
   summary,
   now,
   maintenances = fallbackMaintenances,
+  snapshotUnavailable = false,
 }: {
   monitor: MonitorTarget
   summary?: ProbeMonitorSummary
   now: number
   maintenances?: MaintenanceConfig[]
+  snapshotUnavailable?: boolean
 }) {
   const { t } = useTranslation('common')
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null)
@@ -297,7 +299,7 @@ export default function ProbeMonitorDetail({
   const lazy = usePublicHistory(
     monitor.id,
     `${summary?.latest ?? 'none'}:${monitor.probes?.join(',') ?? ''}:${Math.floor(now / 300)}`,
-    summary?.historyLoaded === false,
+    summary?.historyLoaded === false && (!snapshotUnavailable || expandedMonitor === monitor.id),
     expandedMonitor === monitor.id
   )
   const historical = useMemo(
@@ -308,7 +310,7 @@ export default function ProbeMonitorDetail({
     () => (historical ? refreshProbeSummary(historical, now, monitor) : undefined),
     [historical, now, monitor]
   )
-  const showHistory = lazy.inView || expandedMonitor === monitor.id
+  const showHistory = (!snapshotUnavailable && lazy.inView) || expandedMonitor === monitor.id
   const historyReady = historical?.historyLoaded !== false
   const historyProbes = useMemo(
     () => historical?.probes ?? monitor.probes?.map(emptyProbe) ?? [],
@@ -364,11 +366,13 @@ export default function ProbeMonitorDetail({
                     {t('Probe summary counts', totals)}
                   </Text>
                 )}
-                <Text size="sm" fw={600}>
-                  {current?.uptimePercent === null || current?.uptimePercent === undefined
-                    ? t('No Data')
-                    : t('Overall', { percent: current.uptimePercent.toFixed(3) })}
-                </Text>
+                {!snapshotUnavailable && (
+                  <Text size="sm" fw={600}>
+                    {current?.uptimePercent === null || current?.uptimePercent === undefined
+                      ? t('No Data')
+                      : t('Overall', { percent: current.uptimePercent.toFixed(3) })}
+                  </Text>
+                )}
               </Group>
             </Group>
           </Accordion.Control>

@@ -10,15 +10,21 @@ import { Text } from '@mantine/core'
 import MonitorDetail from '@/components/MonitorDetail'
 import Footer from '@/components/Footer'
 import { useTranslation } from 'react-i18next'
-import { CompactedMonitorStateWrapper, getPublicNativeState } from '@/worker/src/store'
-import { getProbeDashboardSummaries } from '@/worker/src/probes'
+import { CompactedMonitorStateWrapper } from '@/worker/src/store'
+import { getPublicDashboard } from '@/worker/src/public-dashboard'
 import { visiblePublicMonitors } from '@/util/public-monitor-list'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import { summarizeDashboardMonitors } from '@/util/dashboard-status'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { getMonitorIntervalSeconds } from '@/util/monitor-settings'
-import { expandMaintenances, getPresentationSettings } from '@/util/maintenance'
+import { expandMaintenances } from '@/util/maintenance'
+import {
+  guardPublicSnapshot,
+  isPublicSnapshotUnavailable,
+  type PublicSnapshotMetadata,
+} from '@/util/public-snapshot'
+import PublicSnapshotNotice from '@/components/PublicSnapshotNotice'
 
 export const runtime = 'experimental-edge'
 const inter = Inter({ subsets: ['latin'] })
@@ -30,6 +36,10 @@ export default function Home({
   page = initialPage,
   maintenances: plans = initialMaintenances,
   nativeHistoryLoaded = true,
+  snapshotAt = null,
+  stale = false,
+  snapshotIncomplete = false,
+  source = 'd1',
 }: {
   compactedStateStr: string | null
   monitors: MonitorTarget[]
@@ -37,18 +47,28 @@ export default function Home({
   page?: PageConfig
   maintenances?: MaintenanceConfig[]
   nativeHistoryLoaded?: boolean
-}) {
+} & PublicSnapshotMetadata) {
   const { t } = useTranslation('common')
   const router = useRouter()
-  const state = useMemo(
+  const rawState = useMemo(
     () => new CompactedMonitorStateWrapper(compactedStateStr).uncompact(),
     [compactedStateStr]
   )
   const [now, setNow] = useState(() => Math.round(Date.now() / 1000))
+  const snapshotUnavailable = isPublicSnapshotUnavailable(
+    { snapshotAt, stale, snapshotIncomplete, source },
+    now
+  )
+  const guarded = useMemo(
+    () => guardPublicSnapshot(rawState, probeSummaries, snapshotUnavailable),
+    [rawState, probeSummaries, snapshotUnavailable]
+  )
+  const state = guarded.state
+  const summaries = guarded.summaries
   const [monitorId, setMonitorId] = useState('')
   const activeMonitors = useMemo(
-    () => visiblePublicMonitors(monitors, probeSummaries),
-    [monitors, probeSummaries]
+    () => visiblePublicMonitors(monitors, summaries),
+    [monitors, summaries]
   )
   const windowMinute = Math.floor(now / 60)
   const maintenances = useMemo(
@@ -95,7 +115,8 @@ export default function Home({
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [router, activeMonitors])
-  const aggregate = summarizeDashboardMonitors(monitors, state, probeSummaries, maintenances, now)
+  const aggregate = summarizeDashboardMonitors(monitors, state, summaries, maintenances, now)
+  const snapshot = { snapshotAt, stale: snapshotUnavailable, snapshotIncomplete }
 
   // Specify monitorId in URL hash to view a specific monitor (can be used in iframe)
   if (monitorId) {
@@ -105,13 +126,15 @@ export default function Home({
     }
     return (
       <div style={{ maxWidth: '810px' }}>
+        <PublicSnapshotNotice {...snapshot} />
         <MonitorDetail
           monitor={monitor}
           state={state}
-          probeSummaries={probeSummaries}
+          probeSummaries={summaries}
           now={now}
           maintenances={maintenances}
           nativeHistoryLoaded={nativeHistoryLoaded}
+          snapshotUnavailable={snapshotUnavailable}
         />
       </div>
     )
@@ -134,15 +157,17 @@ export default function Home({
             aggregate={aggregate}
             now={now}
             page={page}
+            snapshot={snapshot}
           />
           <MonitorList
             monitors={monitors}
             state={state}
-            probeSummaries={probeSummaries}
+            probeSummaries={summaries}
             now={now}
             page={page}
             maintenances={maintenances}
             nativeHistoryLoaded={nativeHistoryLoaded}
+            snapshotUnavailable={snapshotUnavailable}
           />
         </div>
 
@@ -154,40 +179,12 @@ export default function Home({
 
 export async function getServerSideProps() {
   const { workerConfig: fallbackConfig } = await import('@/uptime.config')
-  const { getRuntimeConfig } = await import('@/worker/src/settings')
-  const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
-  // Read state as string from storage, to avoid hitting server-side cpu time limit
-  const [compactedStateStr, probeSummaries] = await Promise.all([
-    getPublicNativeState(process.env as any, workerConfig.monitors),
-    getProbeDashboardSummaries(
-      process.env as any,
-      workerConfig.monitors,
-      workerConfig.probes,
-      Math.round(Date.now() / 1000)
-    ),
-  ])
-
-  // Only present these values to client
-  const monitors = workerConfig.monitors.map((monitor) => {
-    return {
-      id: monitor.id,
-      name: monitor.name,
-      intervalSeconds: getMonitorIntervalSeconds(monitor),
-      ...(monitor.paused && { paused: true }),
-      ...(monitor.tooltip !== undefined && { tooltip: monitor.tooltip }),
-      ...(monitor.statusPageLink !== undefined && { statusPageLink: monitor.statusPageLink }),
-      ...(monitor.hideLatencyChart !== undefined && { hideLatencyChart: monitor.hideLatencyChart }),
-      ...(monitor.probes?.length && { probes: monitor.probes }),
-    }
-  })
+  const dashboard = await getPublicDashboard(process.env as any, fallbackConfig)
 
   return {
     props: {
-      compactedStateStr,
-      monitors,
-      probeSummaries,
+      ...dashboard,
       nativeHistoryLoaded: false,
-      ...getPresentationSettings(workerConfig),
     },
   }
 }

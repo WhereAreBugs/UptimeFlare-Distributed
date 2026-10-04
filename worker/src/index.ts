@@ -5,7 +5,7 @@ import type { MonitorTarget } from '../../types/config'
 import { workerConfig as fallbackConfig } from '../../uptime.config'
 import { getStatus } from './monitor'
 import { getWorkerLocation } from './util'
-import { handleProbeRequest, cleanupProbeResults } from './probes'
+import { handleProbeRequest, cleanupProbeResults, preflightProbeRequest } from './probes'
 import { getRuntimeConfig } from './settings'
 import { handleAdminRequest } from './admin'
 import { runCloudflareProbe } from './cloudflare-probe'
@@ -13,10 +13,12 @@ import { MAX_SCHEDULED_TARGETS_PER_CRON } from './limits'
 import { runNotifications } from './notifications'
 import { handleManagementRequest } from './management'
 import { handlePublicHistoryRequest } from './history'
+import { publishPublicDashboard } from './public-dashboard'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
   UPTIMEFLARE_D1: D1Database
+  UPTIMEFLARE_PUBLIC_KV?: KVNamespace
   PROBE_TOKENS?: string
   ADMIN_PASSWORD?: string
   ADMIN_SESSION_SECRET?: string
@@ -24,10 +26,17 @@ export interface Env {
 
 const Worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const pathname = new URL(request.url).pathname
     if (new URL(request.url).pathname.startsWith('/api/admin/'))
       return handleAdminRequest(request, env, fallbackConfig)
     if (new URL(request.url).pathname.startsWith('/api/manage/'))
       return handleManagementRequest(request, env, fallbackConfig)
+    if (pathname !== '/api/history') {
+      const preflight = preflightProbeRequest(request, env)
+      if (preflight) return preflight
+    } else if (request.method !== 'GET') {
+      return new Response(null, { status: 405, headers: { Allow: 'GET' } })
+    }
     const workerConfig = await getRuntimeConfig(env, fallbackConfig)
     if (new URL(request.url).pathname === '/api/history')
       return handlePublicHistoryRequest(request, env, workerConfig)
@@ -70,6 +79,9 @@ const Worker = {
     await runNativeMonitors(env, workerConfig, time, getLocation, undefined, budget)
     await runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
       console.error('Notification evaluation failed')
+    )
+    await publishPublicDashboard(env, workerConfig, time).catch(() =>
+      console.error('Public dashboard snapshot publication failed; retaining last known data')
     )
   },
 }

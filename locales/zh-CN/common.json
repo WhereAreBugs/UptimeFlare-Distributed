@@ -122,5 +122,8 @@
   "Monitor paused history": "监控已暂停，以下保留历史结果。",
   "Historical result": "历史结果",
   "Pause or resume changes apply after saving the configuration.": "暂停或恢复在保存配置后生效。",
-  "Probe history unavailable": "历史暂时不可用。"
+  "Probe history unavailable": "历史暂时不可用。",
+  "Public snapshot generated": "状态快照生成于 {{date}}。",
+  "Public snapshot incomplete": "监控数据尚不完整，当前可达性显示为未知。",
+  "Public snapshot stale": "监控数据已过期，当前可达性显示为未知。"
 }

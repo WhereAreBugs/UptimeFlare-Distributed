@@ -39,6 +39,8 @@ jobs:
         run: node scripts/management-smoke.mjs
       - name: Verify dashboard scale and lazy history in the Pages deployment artifact
         run: node scripts/dashboard-smoke.mjs
+      - name: Verify public cached dashboard without D1 and authentication boundaries
+        run: node scripts/public-cache-smoke.mjs
       - name: Prepare shared D1, Pages bindings and deployment config
         run: python3 deploy/provision.py prepare
         env:
@@ -47,6 +49,9 @@ jobs:
           PROBE_TOKENS: ${{ secrets.PROBE_TOKENS }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           ADMIN_SESSION_SECRET: ${{ secrets.ADMIN_SESSION_SECRET }}
+          PUBLIC_KV_ENABLED: ${{ vars.PUBLIC_KV_ENABLED || '0' }}
+          D1_VERIFIED_SCHEMA_HASH: ${{ vars.D1_VERIFIED_SCHEMA_HASH }}
+          D1_VERIFIED_DATABASE_ID: ${{ vars.D1_VERIFIED_DATABASE_ID }}
       - name: Deploy scheduled Worker
         working-directory: worker
         run: npx --no-install wrangler deploy --config wrangler.deploy.json

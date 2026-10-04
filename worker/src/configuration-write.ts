@@ -1,6 +1,8 @@
 import type { MonitorTarget } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { pauseTransitionStatements } from './pause'
+import { publishPublicConfiguration } from './public-dashboard'
+import type { WorkerConfig } from '../../types/config'
 
 /** Authorization guards are evaluated by the same transaction that changes configuration. */
 export async function saveConfiguration(
@@ -40,5 +42,10 @@ export async function saveConfiguration(
     ...pauseTransitionStatements(env, transitions, now, guard),
   ])
   if (results.some((result) => !result.success)) throw new Error('Configuration persistence failed')
-  return !!results[0].meta.changes
+  const changed = !!results[0].meta.changes
+  if (changed)
+    await publishPublicConfiguration(env, value as WorkerConfig, revision + 1).catch(() =>
+      console.error('Public configuration snapshot update failed')
+    )
+  return changed
 }

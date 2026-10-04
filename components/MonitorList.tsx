@@ -29,6 +29,7 @@ export default function MonitorList({
   page = fallbackPageConfig,
   maintenances = fallbackMaintenances,
   nativeHistoryLoaded = true,
+  snapshotUnavailable = false,
 }: {
   monitors: MonitorTarget[]
   state: MonitorState
@@ -37,6 +38,7 @@ export default function MonitorList({
   page?: PageConfig
   maintenances?: MaintenanceConfig[]
   nativeHistoryLoaded?: boolean
+  snapshotUnavailable?: boolean
 }) {
   const { t } = useTranslation('common')
   const active = useMemo(
@@ -87,6 +89,7 @@ export default function MonitorList({
               now={now}
               maintenances={maintenances}
               nativeHistoryLoaded={nativeHistoryLoaded}
+              snapshotUnavailable={snapshotUnavailable}
             />
           </div>
         ))}

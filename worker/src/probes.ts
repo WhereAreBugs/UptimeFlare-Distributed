@@ -20,6 +20,8 @@ import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
 
 export interface ProbeEnv {
   UPTIMEFLARE_D1: D1Database
+  /** Public allowlisted snapshots only; never a source of probe or management authorization. */
+  UPTIMEFLARE_PUBLIC_KV?: KVNamespace
   /** JSON object mapping stable probe IDs to independent bearer tokens. Set as a secret. */
   PROBE_TOKENS?: string
 }
@@ -462,6 +464,23 @@ export async function persistBatch(
   if (response.some((item) => !item.success)) throw new Error('Probe persistence failed')
 }
 
+/** Authenticate before reading runtime settings; anonymous requests must never consume D1. */
+export function preflightProbeRequest(request: Request, env: ProbeEnv): Response | null {
+  const pathname = new URL(request.url).pathname
+  const expectedMethod =
+    pathname === '/api/probes/config' ? 'GET' : pathname === '/api/probes/ingest' ? 'POST' : ''
+  if (!expectedMethod) return json({ error: 'Not found' }, 404)
+  if (request.method !== expectedMethod)
+    return new Response(null, { status: 405, headers: { Allow: expectedMethod } })
+  try {
+    authenticate(request, env)
+    return null
+  } catch (error) {
+    if (error instanceof ProbeRequestError) return json({ error: error.message }, error.status)
+    return json({ error: 'Probe authentication is not configured correctly' }, 503)
+  }
+}
+
 /** The same authenticated endpoints are available on the Worker and the Pages origin. */
 export async function handleProbeRequest(
   request: Request,
@@ -469,6 +488,8 @@ export async function handleProbeRequest(
   monitors: MonitorTarget[],
   network?: ProbeNetwork
 ): Promise<Response> {
+  const preflight = preflightProbeRequest(request, env)
+  if (preflight) return preflight
   try {
     const pathname = new URL(request.url).pathname
     const expectedMethod =
