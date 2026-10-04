@@ -325,10 +325,6 @@ export default function Admin() {
                 <Paper withBorder p="md">
                   <Stack>
                     <Title order={3}>探针</Title>
-                    <Text size="sm" c="dimmed">
-                      Cloudflare 为内置探针，无需令牌。独立探针的默认名称为公网 IP 归属地与 ASN。
-                      名称留空使用自动命名；手动填写可覆盖。新增独立探针需要先配置服务端令牌。
-                    </Text>
                     {config.probes.map((probe, index) => {
                       const assigned = config.monitors.filter(
                         (monitor) => monitor.probes?.includes(probe.id)
