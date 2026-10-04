@@ -9,7 +9,7 @@ export type PublicHistory = {
 
 /** Two requests at a time, de-duplicated, with a bounded cache shared by visible cards. */
 export function createPublicHistoryLoader(
-  fetchHistory: (id: string) => Promise<PublicHistory>,
+  fetchHistory: (id: string, signal: AbortSignal) => Promise<PublicHistory>,
   capacity = 24,
   clock = Date.now
 ) {
@@ -18,28 +18,80 @@ export function createPublicHistoryLoader(
     string,
     { value: PublicHistory; version: number | string | null; time: number }
   >()
-  const pending = new Map<string, Promise<PublicHistory>>()
-  const queue: (() => void)[] = []
+  type Entry = {
+    promise: Promise<PublicHistory>
+    controller: AbortController
+    subscribers: number
+    permanent: boolean
+    start: () => void
+  }
+  const pending = new Map<string, Entry>(),
+    queue: (() => void)[] = []
   let running = 0
+  const canceled = () =>
+    Object.assign(new Error('History request canceled'), { name: 'AbortError' })
   const pump = () => {
     while (running < 2 && queue.length) queue.shift()!()
   }
+  function subscribe(entry: Entry, signal?: AbortSignal) {
+    if (!signal) {
+      entry.permanent = true
+      return entry.promise
+    }
+    entry.subscribers++
+    return new Promise<PublicHistory>((resolve, reject) => {
+      let done = false
+      const finish = (value?: PublicHistory, error?: unknown) => {
+        if (done) return
+        done = true
+        signal.removeEventListener('abort', abort)
+        entry.subscribers--
+        if (!entry.subscribers && !entry.permanent) entry.controller.abort()
+        if (error) reject(error)
+        else resolve(value!)
+      }
+      const abort = () => finish(undefined, canceled())
+      if (signal.aborted) abort()
+      else signal.addEventListener('abort', abort, { once: true })
+      entry.promise.then(
+        (value) => finish(value),
+        (error) => finish(undefined, error)
+      )
+    })
+  }
   return {
-    load(id: string, version: number | string | null) {
+    load(id: string, version: number | string | null, signal?: AbortSignal) {
+      if (signal?.aborted) return Promise.reject(canceled())
       const saved = cache.get(id)
       if (saved && saved.version === version && clock() - saved.time < 300000) {
         cache.delete(id)
         cache.set(id, saved)
         return Promise.resolve(saved.value)
       }
-      const key = id
-      if (pending.has(key)) return pending.get(key)!
-      const request = new Promise<PublicHistory>((resolve, reject) => {
-        queue.push(() => {
+      const existing = pending.get(id)
+      if (existing && !existing.controller.signal.aborted) return subscribe(existing, signal)
+      if (queue.length >= 64) return Promise.reject(new Error('History request queue full'))
+      const controller = new AbortController()
+      let resolve!: (value: PublicHistory) => void, reject!: (error: unknown) => void
+      const promise = new Promise<PublicHistory>((yes, no) => {
+        resolve = yes
+        reject = no
+      })
+      const entry: Entry = {
+        promise,
+        controller,
+        subscribers: 0,
+        permanent: false,
+        start: () => {
+          if (controller.signal.aborted) {
+            reject(canceled())
+            return
+          }
           running++
           void Promise.resolve()
-            .then(() => fetchHistory(id))
+            .then(() => fetchHistory(id, controller.signal))
             .then((value) => {
+              if (controller.signal.aborted) throw canceled()
               if (value.monitorId !== id || (!value.summary && !value.historyLoaded))
                 throw new Error('Invalid monitor history')
               cache.delete(id)
@@ -50,14 +102,27 @@ export function createPublicHistoryLoader(
             .catch(reject)
             .finally(() => {
               running--
-              pending.delete(key)
+              if (pending.get(id) === entry) pending.delete(id)
               pump()
             })
-        })
-      })
-      pending.set(key, request)
+        },
+      }
+      controller.signal.addEventListener(
+        'abort',
+        () => {
+          const position = queue.indexOf(entry.start)
+          if (position >= 0) queue.splice(position, 1)
+          if (pending.get(id) === entry) pending.delete(id)
+          reject(canceled())
+          pump()
+        },
+        { once: true }
+      )
+      pending.set(id, entry)
+      queue.push(entry.start)
+      const result = subscribe(entry, signal)
       pump()
-      return request
+      return result
     },
   }
 }

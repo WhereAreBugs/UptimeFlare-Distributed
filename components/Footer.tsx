@@ -1,5 +1,5 @@
 import { Divider } from '@mantine/core'
-import { pageConfig as fallbackPageConfig } from '@/uptime.config'
+import { pageConfig as fallbackPageConfig } from '@/util/public-defaults'
 import type { PageConfig } from '@/types/config'
 
 export default function Footer({ page = fallbackPageConfig }: { page?: PageConfig } = {}) {

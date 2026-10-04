@@ -1,6 +1,6 @@
 import { Container, Group, Image } from '@mantine/core'
 import classes from '@/styles/Header.module.css'
-import { pageConfig as fallbackPageConfig } from '@/uptime.config'
+import { pageConfig as fallbackPageConfig } from '@/util/public-defaults'
 import type { PageConfig, PageConfigLink } from '@/types/config'
 import { useTranslation } from 'react-i18next'
 import { useRouter } from 'next/router'

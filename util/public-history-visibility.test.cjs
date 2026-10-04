@@ -77,7 +77,8 @@ test('offscreen collapsed cards release local history, ignore late completions, 
   const runtime = lifecycle()
   let observed,
     response,
-    requests = 0
+    requests = 0,
+    cancelled = 0
   global.window = {}
   global.IntersectionObserver = class {
     constructor(callback, options) {
@@ -88,10 +89,18 @@ test('offscreen collapsed cards release local history, ignore late completions, 
     disconnect() {}
   }
   global.window.IntersectionObserver = global.IntersectionObserver
-  global.fetch = () => {
+  global.fetch = (_url, { signal }) => {
     requests++
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       response = resolve
+      signal.addEventListener(
+        'abort',
+        () => {
+          cancelled++
+          reject(new DOMException('Aborted', 'AbortError'))
+        },
+        { once: true }
+      )
     })
   }
   t.after(() => {
@@ -120,12 +129,21 @@ test('offscreen collapsed cards release local history, ignore late completions, 
   }
   response({ ok: true, json: async () => full })
   await settle()
-  assert.equal(runtime.render(hook, false).history, undefined, 'late data stays only in the LRU')
+  assert.equal(runtime.render(hook, false).history, undefined, 'late data is discarded')
+  assert.equal(cancelled, 1, 'offscreen request is cancelled')
   observed([{ isIntersecting: true }])
   runtime.render(hook, false)
   await settle()
+  assert.equal(requests, 2, 'cancelled data is fetched again')
+  response({ ok: true, json: async () => full })
+  await settle()
   assert.equal(runtime.render(hook, false).history, full)
-  assert.equal(requests, 1, 're-entering with the same version does not issue another read')
+  observed([{ isIntersecting: false }])
+  runtime.render(hook, false)
+  observed([{ isIntersecting: true }])
+  runtime.render(hook, false)
+  await settle()
+  assert.equal(requests, 2, 'completed data is reused from the bounded cache')
   runtime.render(hook, true)
   observed([{ isIntersecting: false }])
   runtime.render(hook, true)

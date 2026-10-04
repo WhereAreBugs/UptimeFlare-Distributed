@@ -2,7 +2,7 @@ import { Alert, List, Text, useMantineTheme } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import type { MaintenanceConfig, MonitorTarget, PageConfig } from '@/types/config'
-import { pageConfig as fallbackPageConfig } from '@/uptime.config'
+import { pageConfig as fallbackPageConfig } from '@/util/public-defaults'
 import { useTranslation } from 'react-i18next'
 
 export default function MaintenanceAlert({

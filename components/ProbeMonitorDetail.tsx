@@ -24,7 +24,7 @@ import HistoryTimeline from './HistoryTimeline'
 import HistorySelectionSummary, { formatHistoryTimeRange } from './HistorySelectionSummary'
 import type { HistorySegment } from '@/util/history-segments'
 import { categoryColors, getActiveMaintenance, getMonitorCategory } from '@/util/dashboard-status'
-import { maintenances as fallbackMaintenances } from '@/uptime.config'
+import { maintenances as fallbackMaintenances } from '@/util/public-defaults'
 import usePublicHistory from './usePublicHistory'
 import { withProbeHistory } from '@/util/public-history-loader'
 
@@ -440,7 +440,7 @@ export default function ProbeMonitorDetail({
                   multiple
                   variant="contained"
                   value={expandedProbes}
-                  onChange={setExpandedProbes}
+                  onChange={(values) => setExpandedProbes(values.slice(-2))}
                 >
                   {probes.map((probe) => (
                     <Accordion.Item key={probe.id} value={probe.id}>

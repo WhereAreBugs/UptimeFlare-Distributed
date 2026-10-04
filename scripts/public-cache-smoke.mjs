@@ -200,8 +200,8 @@ function pageProps(html) {
   check(!!match, 'Expected actual Next page props')
   return JSON.parse(match[1]).props.pageProps
 }
-async function loadListHelpers() {
-  const filename = join(root, 'util/public-monitor-list.ts')
+async function loadHelpers(name) {
+  const filename = join(root, 'util/' + name + '.ts')
   const compiled = new Module(filename)
   compiled._compile(
     ts.transpileModule(await readFile(filename, 'utf8'), {
@@ -211,11 +211,12 @@ async function loadListHelpers() {
   )
   return compiled.exports
 }
-const list = await loadListHelpers()
+const list = await loadHelpers('public-monitor-list')
+const { decodePublicWire } = await loadHelpers('public-wire')
 const reports = []
 async function publicChecks(mf, snapshot) {
   const responses = []
-  for (const path of ['/', '/api/data']) {
+  for (const path of ['/', '/api/data', '/api/state']) {
     const response = await mf.dispatchFetch(origin + path)
     check(response.status === 200, `${path} must succeed with no D1 binding`)
     const body = await response.text()
@@ -227,9 +228,14 @@ async function publicChecks(mf, snapshot) {
       gzipBytes: gzipSync(body).length,
     })
   }
-  const props = pageProps(responses[0].body)
+  check(
+    Object.keys(pageProps(responses[0].body)).length === 0,
+    'Static shell must contain no dynamic page props'
+  )
+  const wire = JSON.parse(responses[2].body)
+  const props = decodePublicWire(wire)
   const data = JSON.parse(responses[1].body)
-  for (const value of [props, data]) {
+  for (const value of [wire, data]) {
     check(value.source === 'kv', 'Actual Worker env must resolve the KV binding')
     check(
       value.snapshotAt === snapshot.generatedAt,

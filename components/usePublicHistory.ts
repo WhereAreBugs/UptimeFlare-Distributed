@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPublicHistoryLoader, type PublicHistory } from '@/util/public-history-loader'
 
-const loader = createPublicHistoryLoader(async (id) => {
+const loader = createPublicHistoryLoader(async (id, signal) => {
   const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal.addEventListener('abort', abort, { once: true })
+  if (signal.aborted) abort()
   const timer = setTimeout(() => controller.abort(), 10000)
   try {
     const response = await fetch(`/api/history?id=${encodeURIComponent(id)}`, {
@@ -14,6 +17,7 @@ const loader = createPublicHistoryLoader(async (id) => {
     return (await response.json()) as PublicHistory
   } finally {
     clearTimeout(timer)
+    signal.removeEventListener('abort', abort)
   }
 })
 
@@ -48,9 +52,10 @@ export default function usePublicHistory(
       return
     }
     let active = true
+    const controller = new AbortController()
     setFailed(false)
     loader
-      .load(id, version)
+      .load(id, version, controller.signal)
       .then((value) => {
         if (active) setHistory(value)
       })
@@ -59,6 +64,7 @@ export default function usePublicHistory(
       })
     return () => {
       active = false
+      controller.abort()
     }
   }, [id, version, enabled, expanded, inView])
   return { ref, inView, history: history?.monitorId === id ? history : undefined, failed }

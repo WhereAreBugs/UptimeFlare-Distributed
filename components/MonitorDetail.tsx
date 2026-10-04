@@ -12,7 +12,7 @@ import {
 const DetailChart = dynamic(() => import('./DetailChart'), { ssr: false })
 const DetailBar = dynamic(() => import('./DetailBar'), { ssr: false })
 import { getColor } from '@/util/color'
-import { maintenances as fallbackMaintenances } from '@/uptime.config'
+import { maintenances as fallbackMaintenances } from '@/util/public-defaults'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import ProbeMonitorDetail from './ProbeMonitorDetail'

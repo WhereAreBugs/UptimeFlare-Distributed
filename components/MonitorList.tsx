@@ -4,7 +4,7 @@ import MonitorDetail from './MonitorDetail'
 import {
   pageConfig as fallbackPageConfig,
   maintenances as fallbackMaintenances,
-} from '@/uptime.config'
+} from '@/util/public-defaults'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
@@ -59,7 +59,7 @@ export default function MonitorList({
       if (saved) {
         const parsed: unknown = JSON.parse(saved)
         if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string'))
-          setExpandedGroups(parsed)
+          setExpandedGroups(parsed.slice(-3))
       }
     } catch {
       /* Preferences are optional. */
@@ -122,7 +122,7 @@ export default function MonitorList({
             multiple
             variant="contained"
             value={expandedGroups}
-            onChange={setExpandedGroups}
+            onChange={(values) => setExpandedGroups(values.slice(-3))}
             transitionDuration={0}
           >
             {groups.map((group) => {

@@ -1,7 +1,7 @@
 import type { MaintenanceConfig, MonitorTarget, PageConfig } from '@/types/config'
 import { Container, Text } from '@mantine/core'
 import MaintenanceAlert from './MaintenanceAlert'
-import { pageConfig as fallbackPageConfig } from '@/uptime.config'
+import { pageConfig as fallbackPageConfig } from '@/util/public-defaults'
 import { useTranslation } from 'react-i18next'
 import {
   categoryColors,

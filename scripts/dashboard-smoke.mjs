@@ -8,12 +8,22 @@ import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
 import { performance } from 'node:perf_hooks'
 import { createHash } from 'node:crypto'
+import Module from 'node:module'
+import ts from 'typescript'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const staticRoot = join(root, 'out')
 const artifact = join(root, '.deployment/unified-worker/index.js')
+const compiledWire = new Module(join(root, 'util/public-wire.ts'))
+compiledWire._compile(
+  ts.transpileModule(await readFile(compiledWire.id, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText,
+  compiledWire.id
+)
+const { decodePublicWire } = compiledWire.exports
 const origin = 'https://dashboard.test'
-const targetCount = 100
+const targetCount = 500
 const probeCount = 3
 const pairCount = targetCount * probeCount
 const targetsPerGroup = 20
@@ -388,18 +398,30 @@ try {
   const dataValue = JSON.parse(data.encoded)
   assert.equal(Object.keys(dataValue.monitors).length, targetCount)
   assert.ok(
-    data.measured.rawBytes < 200 * 1024,
-    '100-target dashboard JSON must remain below 200 KiB'
+    data.measured.rawBytes <= 256 * 1024,
+    '500-target dashboard JSON must remain below 256 KiB'
   )
   privateFree(data.encoded)
-  lightweight(dataValue.monitors)
+  assert.ok(
+    dataValue.projection === 'current-summary',
+    'Large legacy response must degrade to a bounded current summary'
+  )
   noHistoryRead(data.measured)
 
   const home = await request('/')
-  const props = pageProps(home.encoded)
+  assert.deepEqual(
+    pageProps(home.encoded),
+    {},
+    'Static shell contains no private or dynamic configuration'
+  )
+  const state = await request('/api/state')
+  const props = decodePublicWire(JSON.parse(state.encoded))
+  assert.equal(props.monitors.length, targetCount)
+  assert.ok(state.measured.rawBytes <= 256 * 1024)
+  noHistoryRead(state.measured)
   assert.ok(
-    Buffer.byteLength(JSON.stringify(props)) < 200 * 1024,
-    'Homepage data must remain below 200 KiB'
+    state.measured.rawBytes <= 256 * 1024,
+    '500-target summary wire must remain below 256 KiB'
   )
   assert.equal(
     (home.encoded.match(/<canvas\b/g) ?? []).length,
@@ -475,7 +497,7 @@ try {
   const closed = await request('/api/data')
   const closedValue = JSON.parse(closed.encoded)
   assert.equal(closedValue.paused, targetCount)
-  assert.ok(closed.measured.rawBytes < 20 * 1024, 'All-paused API must remain minimal')
+  assert.ok(closed.measured.rawBytes < 120 * 1024, 'All-paused API must remain minimal')
   assert.ok(
     closed.measured.tables.every(
       (table) => table === 'probe_metadata' || !table.startsWith('probe_')

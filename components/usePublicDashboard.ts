@@ -1,3 +1,4 @@
+import { decodePublicWire } from '@/util/public-wire'
 import { useEffect, useState } from 'react'
 import type { PublicDashboard } from '@/types/public-dashboard'
 
@@ -19,7 +20,18 @@ export function usePublicDashboard() {
       try {
         const response = await fetch('/api/state', { signal: current.signal, cache: 'no-store' })
         if (!response.ok) throw new Error('State unavailable')
-        const value: PublicDashboard = await response.json()
+        const raw: any = await response.json()
+        const value = {
+          ...decodePublicWire(raw),
+          ...{
+            source: raw.source,
+            snapshotAt: raw.snapshotAt,
+            stale: raw.stale,
+            snapshotIncomplete: raw.snapshotIncomplete,
+            materializedAt: raw.materializedAt,
+            cachedAt: raw.cachedAt,
+          },
+        } as PublicDashboard
         if (!stopped && !current.signal.aborted) {
           setDashboard(value)
           setError(false)
