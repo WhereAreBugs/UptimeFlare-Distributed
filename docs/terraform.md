@@ -1,3 +1,7 @@
+# 旧 Pages Terraform 兼容记录
+
+此文件及 `deploy.tf` 仅记录旧 Pages 部署。统一 Worker 的静态资产发布请使用 `deploy/provision.py`、Wrangler 与当前 GitHub Actions，按 [state-v2](state-v2.md) 完成迁移。不要继续运行下面的旧 Pages 发布流程。
+
 # 可选 Terraform 部署（Cloudflare provider 5.x）
 
 默认 GitHub Actions 部署使用 `deploy/provision.py` 与 Wrangler；`deploy.tf` 是可选的基础设施管理入口。两种方式不要同时管理同名资源。Terraform 管理 D1、Worker 代码/绑定/分钟 Cron 和 Pages 项目/生产绑定；Pages 静态产物发布与 D1 SQL 初始化仍是明确步骤。

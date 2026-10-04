@@ -1,0 +1,616 @@
+{
+  "local": true,
+  "production": false,
+  "cpuMs": null,
+  "cpuNote": "Local workerd exposes D1 metadata and wall time; production CPU requires Cloudflare telemetry",
+  "scenarios": [
+    {
+      "version": "1",
+      "scenario": "stable",
+      "samples": 30,
+      "sql": 22,
+      "rowsRead": 1870,
+      "rowsWritten": 244,
+      "rowsReturned": 3,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 243.30041700000004
+    },
+    {
+      "version": "1",
+      "scenario": "outage",
+      "samples": 30,
+      "sql": 22,
+      "rowsRead": 3258,
+      "rowsWritten": 305,
+      "rowsReturned": 6,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 226.9669170000002
+    },
+    {
+      "version": "1",
+      "scenario": "timeout",
+      "samples": 30,
+      "sql": 22,
+      "rowsRead": 3890,
+      "rowsWritten": 335,
+      "rowsReturned": 6,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 227.99979099999996
+    },
+    {
+      "version": "1",
+      "scenario": "notification-recovery",
+      "samples": 30,
+      "sql": 22,
+      "rowsRead": 5152,
+      "rowsWritten": 245,
+      "rowsReturned": 6,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 225.26595799999996
+    },
+    {
+      "version": "1",
+      "scenario": "backlog",
+      "samples": 200,
+      "sql": 17,
+      "rowsRead": 67715,
+      "rowsWritten": 520,
+      "rowsReturned": 6,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 222.24524999999994
+    },
+    {
+      "version": "1",
+      "scenario": "native-stable",
+      "sql": 8,
+      "rowsRead": 383,
+      "rowsWritten": 54,
+      "rowsReturned": 26,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 104.01858300000004
+    },
+    {
+      "version": "1",
+      "scenario": "native-failure",
+      "sql": 8,
+      "rowsRead": 778,
+      "rowsWritten": 53,
+      "rowsReturned": 52,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 103.92845800000032
+    },
+    {
+      "version": "1",
+      "scenario": "native-recovery",
+      "sql": 8,
+      "rowsRead": 879,
+      "rowsWritten": 53,
+      "rowsReturned": 57,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 107.24354200000016
+    },
+    {
+      "version": "2",
+      "scenario": "stable",
+      "samples": 30,
+      "sql": 33,
+      "rowsRead": 866,
+      "rowsWritten": 190,
+      "rowsReturned": 8,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 375.7501669999997
+    },
+    {
+      "version": "2",
+      "scenario": "outage",
+      "samples": 30,
+      "sql": 33,
+      "rowsRead": 1062,
+      "rowsWritten": 282,
+      "rowsReturned": 41,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 365.1745000000001
+    },
+    {
+      "version": "2",
+      "scenario": "timeout",
+      "samples": 30,
+      "sql": 33,
+      "rowsRead": 1032,
+      "rowsWritten": 311,
+      "rowsReturned": 40,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 395.0384589999999
+    },
+    {
+      "version": "2",
+      "scenario": "notification-recovery",
+      "samples": 30,
+      "sql": 33,
+      "rowsRead": 1002,
+      "rowsWritten": 132,
+      "rowsReturned": 41,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 363.7550000000001
+    },
+    {
+      "version": "2",
+      "scenario": "backlog",
+      "samples": 200,
+      "sql": 26,
+      "rowsRead": 2996,
+      "rowsWritten": 134,
+      "rowsReturned": 38,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 314.0272500000001
+    },
+    {
+      "version": "2",
+      "scenario": "native-stable",
+      "sql": 14,
+      "rowsRead": 765,
+      "rowsWritten": 129,
+      "rowsReturned": 28,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 188.45254099999966
+    },
+    {
+      "version": "2",
+      "scenario": "native-failure",
+      "sql": 16,
+      "rowsRead": 1397,
+      "rowsWritten": 184,
+      "rowsReturned": 68,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 208.71349999999984
+    },
+    {
+      "version": "2",
+      "scenario": "native-recovery",
+      "sql": 15,
+      "rowsRead": 1322,
+      "rowsWritten": 169,
+      "rowsReturned": 53,
+      "doRequests": 0,
+      "doDurationMs": 0,
+      "wallDurationMs": 200.65737499999977
+    }
+  ],
+  "capacity": {
+    "native200": {
+      "sql": 22,
+      "rowsRead": 16433,
+      "rowsWritten": 3004,
+      "rowsReturned": 201,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "probe200Windows": {
+      "sql": 25,
+      "rowsRead": 7571,
+      "rowsWritten": 2609,
+      "rowsReturned": 6,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "notification500": {
+      "sql": 10,
+      "rowsRead": 8519,
+      "rowsWritten": 0,
+      "rowsReturned": 607,
+      "doRequests": 0,
+      "doDurationMs": 0
+    }
+  },
+  "dashboard": {
+    "passed": true,
+    "actualWorkerArtifact": true,
+    "artifactSha256": "4b07a4f6648394337509bdfdd76faef3bcdaa54c744c291666ee063a64531065",
+    "disposableD1": true,
+    "targets": 500,
+    "probes": 3,
+    "assignments": 1500,
+    "groups": 25,
+    "targetsPerGroup": 20,
+    "seeded": {
+      "probe_latest": 1500,
+      "probe_totals": 1500,
+      "probe_buckets": 216000,
+      "probe_days": 135000,
+      "probe_samples": 150000,
+      "probe_stage_totals": 1500
+    },
+    "firstObservedSelectsUseAllForD1Metadata": true,
+    "gzipBytesAreLocalCompressionMeasurements": true,
+    "measurements": [
+      {
+        "path": "/api/data",
+        "status": 200,
+        "rawBytes": 160331,
+        "gzipBytes": 3495,
+        "elapsedMs": 38.15,
+        "queries": 4,
+        "rowsRead": 9009,
+        "rowsReturned": 3001,
+        "rowsWritten": 0,
+        "tables": [
+          "admin_config",
+          "probe_latest",
+          "probe_metadata",
+          "probe_sample_details",
+          "probe_totals"
+        ]
+      },
+      {
+        "path": "/",
+        "status": 200,
+        "rawBytes": 2418,
+        "gzipBytes": 934,
+        "elapsedMs": 5.11,
+        "queries": 0,
+        "rowsRead": 0,
+        "rowsReturned": 0,
+        "rowsWritten": 0,
+        "tables": []
+      },
+      {
+        "path": "/api/state",
+        "status": 200,
+        "rawBytes": 162932,
+        "gzipBytes": 5045,
+        "elapsedMs": 22.88,
+        "queries": 4,
+        "rowsRead": 9009,
+        "rowsReturned": 3001,
+        "rowsWritten": 0,
+        "tables": [
+          "admin_config",
+          "probe_latest",
+          "probe_metadata",
+          "probe_sample_details",
+          "probe_totals"
+        ]
+      },
+      {
+        "path": "/api/history?id=fixture-target-000",
+        "status": 200,
+        "rawBytes": 93140,
+        "gzipBytes": 3004,
+        "elapsedMs": 10.13,
+        "queries": 8,
+        "rowsRead": 2670,
+        "rowsReturned": 1012,
+        "rowsWritten": 0,
+        "tables": [
+          "admin_config",
+          "probe_buckets",
+          "probe_days",
+          "probe_latest",
+          "probe_metadata",
+          "probe_sample_details",
+          "probe_samples",
+          "probe_stage_totals",
+          "probe_totals"
+        ]
+      },
+      {
+        "path": "/api/history?id=fixture-target-000&id=fixture-target-000",
+        "status": 400,
+        "rawBytes": 35,
+        "gzipBytes": 55,
+        "elapsedMs": 1.02,
+        "queries": 0,
+        "rowsRead": 0,
+        "rowsReturned": 0,
+        "rowsWritten": 0,
+        "tables": []
+      },
+      {
+        "path": "/api/history?id=fixture-target-000&extra=1",
+        "status": 400,
+        "rawBytes": 35,
+        "gzipBytes": 55,
+        "elapsedMs": 0.83,
+        "queries": 0,
+        "rowsRead": 0,
+        "rowsReturned": 0,
+        "rowsWritten": 0,
+        "tables": []
+      },
+      {
+        "path": "/",
+        "status": 200,
+        "rawBytes": 2418,
+        "gzipBytes": 934,
+        "elapsedMs": 1.68,
+        "queries": 0,
+        "rowsRead": 0,
+        "rowsReturned": 0,
+        "rowsWritten": 0,
+        "tables": []
+      },
+      {
+        "path": "/api/history?id=fixture-target-000",
+        "status": 404,
+        "rawBytes": 29,
+        "gzipBytes": 49,
+        "elapsedMs": 2.64,
+        "queries": 2,
+        "rowsRead": 9,
+        "rowsReturned": 1,
+        "rowsWritten": 0,
+        "tables": [
+          "admin_config",
+          "probe_metadata"
+        ]
+      },
+      {
+        "path": "/api/data",
+        "status": 200,
+        "rawBytes": 88258,
+        "gzipBytes": 1822,
+        "elapsedMs": 5.51,
+        "queries": 2,
+        "rowsRead": 9,
+        "rowsReturned": 1,
+        "rowsWritten": 0,
+        "tables": [
+          "admin_config",
+          "probe_metadata"
+        ]
+      },
+      {
+        "path": "/",
+        "status": 200,
+        "rawBytes": 2418,
+        "gzipBytes": 934,
+        "elapsedMs": 1.62,
+        "queries": 0,
+        "rowsRead": 0,
+        "rowsReturned": 0,
+        "rowsWritten": 0,
+        "tables": []
+      }
+    ]
+  },
+  "coordinator": {
+    "passed": true,
+    "actualWorkerArtifact": true,
+    "realDurableObjectRpc": true,
+    "reconstructed": true,
+    "first": 27.00916600000005,
+    "replay": 4.276374999999916,
+    "statusRpcWallMs": 0,
+    "regionalRpcWallMs": [
+      7,
+      9
+    ],
+    "targetRequests": 30,
+    "locationRequests": 2,
+    "resourceRecords": [
+      {
+        "event": "resource_counts",
+        "scope": "coordinator",
+        "sql": 17,
+        "rowsRead": 2674,
+        "rowsWritten": 74,
+        "rowsReturned": 2,
+        "doRequests": 0,
+        "doDurationMs": 0,
+        "wallDurationMs": 10
+      },
+      {
+        "event": "resource_counts",
+        "scope": "root-fetch",
+        "sql": 2,
+        "rowsRead": 5,
+        "rowsWritten": 0,
+        "rowsReturned": 1,
+        "doRequests": 2,
+        "doDurationMs": 15,
+        "wallDurationMs": 20
+      },
+      {
+        "event": "resource_counts",
+        "scope": "coordinator",
+        "sql": 3,
+        "rowsRead": 6,
+        "rowsWritten": 0,
+        "rowsReturned": 2,
+        "doRequests": 0,
+        "doDurationMs": 0,
+        "wallDurationMs": 1
+      },
+      {
+        "event": "resource_counts",
+        "scope": "root-fetch",
+        "sql": 2,
+        "rowsRead": 5,
+        "rowsWritten": 0,
+        "rowsReturned": 1,
+        "doRequests": 1,
+        "doDurationMs": 1,
+        "wallDurationMs": 2
+      },
+      {
+        "event": "resource_counts",
+        "scope": "coordinator",
+        "sql": 5,
+        "rowsRead": 65,
+        "rowsWritten": 2,
+        "rowsReturned": 21,
+        "doRequests": 0,
+        "doDurationMs": 0,
+        "wallDurationMs": 8
+      },
+      {
+        "event": "resource_counts",
+        "scope": "root-fetch",
+        "sql": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "rowsReturned": 0,
+        "doRequests": 0,
+        "doDurationMs": 0,
+        "wallDurationMs": 12
+      },
+      {
+        "event": "resource_counts",
+        "scope": "coordinator",
+        "sql": 3,
+        "rowsRead": 6,
+        "rowsWritten": 0,
+        "rowsReturned": 2,
+        "doRequests": 0,
+        "doDurationMs": 0,
+        "wallDurationMs": 1
+      },
+      {
+        "event": "resource_counts",
+        "scope": "root-fetch",
+        "sql": 2,
+        "rowsRead": 5,
+        "rowsWritten": 0,
+        "rowsReturned": 1,
+        "doRequests": 2,
+        "doDurationMs": 2,
+        "wallDurationMs": 5
+      },
+      {
+        "event": "resource_counts",
+        "scope": "coordinator",
+        "sql": 3,
+        "rowsRead": 6,
+        "rowsWritten": 0,
+        "rowsReturned": 2,
+        "doRequests": 0,
+        "doDurationMs": 0,
+        "wallDurationMs": 1
+      },
+      {
+        "event": "resource_counts",
+        "scope": "root-fetch",
+        "sql": 2,
+        "rowsRead": 5,
+        "rowsWritten": 0,
+        "rowsReturned": 1,
+        "doRequests": 1,
+        "doDurationMs": 4,
+        "wallDurationMs": 5
+      }
+    ],
+    "cpuMs": null
+  },
+  "entrypoint": {
+    "local": true,
+    "production": false,
+    "checks": {
+      "/": 200,
+      "/admin": 200,
+      "/api/admin/config": 401,
+      "/api/manage/status": 401
+    },
+    "singlePort": 8795,
+    "persistedD1": true,
+    "shutdownExit": 0
+  },
+  "cache": {
+    "passed": true,
+    "actualWorkerArtifact": true,
+    "artifactSha256": "4b07a4f6648394337509bdfdd76faef3bcdaa54c744c291666ee063a64531065",
+    "d1Bound": false,
+    "checks": 522,
+    "reports": [
+      {
+        "scenario": "metadata-only",
+        "targets": 74,
+        "closed": 58,
+        "unknown": 16,
+        "responses": [
+          {
+            "path": "/",
+            "rawBytes": 2418,
+            "gzipBytes": 934
+          },
+          {
+            "path": "/api/data",
+            "rawBytes": 30255,
+            "gzipBytes": 951
+          },
+          {
+            "path": "/api/state",
+            "rawBytes": 10605,
+            "gzipBytes": 978
+          }
+        ]
+      },
+      {
+        "scenario": "expired-complete",
+        "targets": 74,
+        "closed": 58,
+        "unknown": 16,
+        "responses": [
+          {
+            "path": "/",
+            "rawBytes": 2418,
+            "gzipBytes": 934
+          },
+          {
+            "path": "/api/data",
+            "rawBytes": 30256,
+            "gzipBytes": 954
+          },
+          {
+            "path": "/api/state",
+            "rawBytes": 10605,
+            "gzipBytes": 984
+          }
+        ]
+      },
+      {
+        "scenario": "unauthenticated",
+        "responses": [
+          {
+            "path": "/api/admin/config",
+            "status": 401
+          },
+          {
+            "path": "/api/admin/tokens",
+            "status": 401
+          },
+          {
+            "path": "/api/probes/config",
+            "status": 401
+          },
+          {
+            "path": "/api/probes/ingest",
+            "status": 401
+          },
+          {
+            "path": "/api/manage/status",
+            "status": 401
+          },
+          {
+            "path": "/api/manage/groups",
+            "status": 401
+          }
+        ]
+      }
+    ]
+  }
+}

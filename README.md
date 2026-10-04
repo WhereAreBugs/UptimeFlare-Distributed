@@ -1,3 +1,5 @@
+> 统一 Worker/state-v2 改造：静态资源、API、Cron、区域 DO 与协调 DO 使用一个入口。构建及本地运行见 [本地部署](docs/local-deployment.md)，协议、容量、迁移和回滚见 [state-v2](docs/state-v2.md)，本地测试及资源对比见 [验收记录](docs/refactor-validation.md)，生产续作见 [部署记录](docs/refactor-deployment.md)。旧 Pages/Terraform 步骤仅作兼容记录。
+
 <div align="right">
   <a title="English" href="README.md"><img src="https://img.shields.io/badge/-English-A31F34?style=for-the-badge" alt="English" /></a>
   <a title="简体中文" href="README_zh-CN.md"><img src="https://img.shields.io/badge/-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-545759?style=for-the-badge" alt="简体中文"></a>
