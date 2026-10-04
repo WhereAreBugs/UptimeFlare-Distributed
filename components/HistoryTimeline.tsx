@@ -15,6 +15,7 @@ export default function HistoryTimeline<Status extends string>({
   height,
   color,
   label,
+  compactLabel,
   href,
   onSelect,
 }: {
@@ -24,10 +25,11 @@ export default function HistoryTimeline<Status extends string>({
   height: number
   color: (status: Status) => string
   label: (segment: HistorySegment<Status>) => string
+  compactLabel: (segment: HistorySegment<Status>) => string
   href?: (segment: HistorySegment<Status>) => string
   onSelect: (segment: HistorySegment<Status>) => void
 }) {
-  const compact = useMediaQuery('(max-width: 48em)')
+  const compact = useMediaQuery('(max-width: 48em)', false, { getInitialValueInEffect: false })
   const segments = compact
     ? mergeHistorySegments(buckets, bucketSeconds)
     : buckets.map((bucket, index) => ({
@@ -38,12 +40,21 @@ export default function HistoryTimeline<Status extends string>({
   return (
     <div className={classes.timeline} style={{ height }} role="group" aria-label={ariaLabel}>
       {segments.map((segment) => {
-        const description = label(segment)
+        const description = compact ? compactLabel(segment) : label(segment)
         const shared = {
           className: classes.segment,
           'aria-label': description,
           style: { flexGrow: segment.bucketCount, background: color(segment.status) },
         }
+        if (compact)
+          return (
+            <button
+              {...shared}
+              key={segment.startTime}
+              type="button"
+              onClick={() => onSelect(segment)}
+            />
+          )
         return (
           <Tooltip
             key={segment.startTime}
@@ -51,14 +62,7 @@ export default function HistoryTimeline<Status extends string>({
             multiline
             events={{ hover: true, focus: true, touch: true }}
           >
-            {compact ? (
-              <button
-                {...shared}
-                type="button"
-                aria-haspopup="dialog"
-                onClick={() => onSelect(segment)}
-              />
-            ) : href ? (
+            {href ? (
               <a {...shared} href={href(segment)} />
             ) : (
               <div {...shared} tabIndex={0} role="img" />

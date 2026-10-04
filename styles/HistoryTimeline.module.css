@@ -24,6 +24,25 @@ button.segment {
   outline-offset: -2px;
 }
 
+.summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 8px 0 0;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.summary dt {
+  color: var(--mantine-color-dimmed);
+}
+
+.summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 48em) {
   .timeline {
     gap: 0;

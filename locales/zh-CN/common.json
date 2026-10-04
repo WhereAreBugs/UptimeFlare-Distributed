@@ -55,6 +55,8 @@
   "Probe failure statistics": "失败统计：",
   "Probe no failures": "保留记录中无失败",
   "Probe history": "探测历史",
+  "History selected range": "时段",
+  "History reachability": "可达性",
   "Probe history coverage": "{{reported}} / {{total}} 个探针有数据",
   "Probe bucket detail": "{{checks}} 次检查 · {{failures}} 次失败 · 平均 {{latency}} ms",
   "Probe no samples": "无检查样本",

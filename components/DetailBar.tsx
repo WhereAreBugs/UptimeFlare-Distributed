@@ -3,8 +3,9 @@ import { getColor } from '@/util/color'
 import { mergeHistorySegments } from '@/util/history-segments'
 import { Box, Tooltip, Modal } from '@mantine/core'
 import { useMediaQuery, useResizeObserver } from '@mantine/hooks'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import HistorySelectionSummary from './HistorySelectionSummary'
 const moment = require('moment')
 require('moment-precise-range-plugin')
 
@@ -30,6 +31,12 @@ export default function DetailBar({
   const [modalOpened, setModalOpened] = useState(false)
   const [modalTitle, setModalTitle] = useState('')
   const [modelContent, setModelContent] = useState(<div />)
+  const [selection, setSelection] = useState<{
+    range: string
+    reachability: string
+    averageLatencyMs: number | null
+  } | null>(null)
+  useEffect(() => setSelection(null), [monitor.id])
 
   const overlapLen = (x1: number, x2: number, y1: number, y2: number) => {
     return Math.max(0, Math.min(x2, y2) - Math.max(x1, y1))
@@ -169,14 +176,16 @@ export default function DetailBar({
 
   return (
     <>
-      <Modal
-        opened={modalOpened}
-        onClose={() => setModalOpened(false)}
-        title={modalTitle}
-        size={'40em'}
-      >
-        {modelContent}
-      </Modal>
+      {!isMobile && (
+        <Modal
+          opened={modalOpened}
+          onClose={() => setModalOpened(false)}
+          title={modalTitle}
+          size={'40em'}
+        >
+          {modelContent}
+        </Modal>
+      )}
       <Box
         style={{
           display: 'flex',
@@ -201,66 +210,70 @@ export default function DetailBar({
               const dateRange = firstDate === lastDate ? firstDate : `${firstDate} – ${lastDate}`
               const monitored = members.reduce((total, day) => total + day.monitoredSeconds, 0)
               const down = members.reduce((total, day) => total + day.downSeconds, 0)
-              const percent = monitored
-                ? (((monitored - down) / monitored) * 100).toPrecision(4)
-                : null
-              const label = `${dateRange} · ${
-                percent === null ? t('No Data') : t('Overall', { percent })
-              }${
-                down > 0
-                  ? ` · ${t('Down for', {
-                      duration: moment.preciseDiff(moment(0), moment(down * 1000)),
-                    })}`
-                  : ''
-              }`
+              const reachability = t(
+                monitored === 0
+                  ? 'Probe unknown'
+                  : down === 0
+                  ? 'Probe operational'
+                  : down >= monitored
+                  ? 'Probe unreachable'
+                  : 'Probe partial reachability'
+              )
               return (
-                <Tooltip
+                <button
                   key={segment.startTime}
-                  label={label}
-                  multiline
-                  events={{ hover: true, focus: true, touch: true }}
-                >
-                  <button
-                    type="button"
-                    aria-label={label}
-                    aria-haspopup="dialog"
-                    style={{
-                      // All days have the same duration; no fixed gaps or minimum
-                      // widths may distort their proportional share of the timeline.
-                      flex: `${segment.bucketCount} 1 0`,
-                      minWidth: 0,
-                      height: 20,
-                      padding: 0,
-                      border: 0,
-                      margin: 0,
-                      background: segment.status,
-                      cursor: 'pointer',
-                      outlineOffset: -2,
-                    }}
-                    onClick={() => {
-                      setModalTitle(`${monitor.name} · ${dateRange}`)
-                      setModelContent(
-                        <div
-                          style={{ maxHeight: '65vh', overflowY: 'auto', overflowWrap: 'anywhere' }}
-                        >
-                          {members.map((day) => (
-                            <section key={day.time} style={{ marginBottom: 16 }}>
-                              <div style={{ fontWeight: 600 }}>
-                                {Number.isNaN(Number(day.percent)) &&
-                                  `${new Date(day.time * 1000).toLocaleDateString()} · `}
-                                {dayLabel(day)}
-                              </div>
-                              {day.reasons.map((reason, index) => (
-                                <div key={index}>{reason}</div>
-                              ))}
-                            </section>
-                          ))}
-                        </div>
+                  type="button"
+                  aria-label={`${dateRange} · ${reachability}`}
+                  aria-pressed={selection?.range === dateRange}
+                  style={{
+                    // All days have the same duration; no fixed gaps or minimum
+                    // widths may distort their proportional share of the timeline.
+                    flex: `${segment.bucketCount} 1 0`,
+                    minWidth: 0,
+                    height: 20,
+                    padding: 0,
+                    border: 0,
+                    margin: 0,
+                    background: segment.status,
+                    cursor: 'pointer',
+                    outlineOffset: -2,
+                  }}
+                  onClick={() => {
+                    const failures = state.incident[monitor.id].filter(
+                      (incident) =>
+                        incident.error[0] !== 'dummy' &&
+                        incident.start[0] < segment.endTime &&
+                        (incident.end === null || incident.end > segment.startTime)
+                    )
+                    let latencySum = 0
+                    let latencyCount = 0
+                    for (const sample of state.latency[monitor.id] ?? []) {
+                      if (
+                        !(sample.time >= segment.startTime && sample.time < segment.endTime) ||
+                        !Number.isFinite(sample.ping) ||
+                        sample.ping < 0
                       )
-                      setModalOpened(true)
-                    }}
-                  />
-                </Tooltip>
+                        continue
+                      if (
+                        failures.some(
+                          (incident) =>
+                            incident.start[0] <= sample.time &&
+                            (incident.end === null || sample.time < incident.end)
+                        )
+                      )
+                        continue
+                      latencySum += sample.ping
+                      latencyCount++
+                    }
+                    // Freeze the selected values at click time, including null
+                    // when this retained day range has no successful samples.
+                    setSelection({
+                      range: dateRange,
+                      reachability,
+                      averageLatencyMs: latencyCount ? latencySum / latencyCount : null,
+                    })
+                  }}
+                />
               )
             })
           : uptimePercentBars &&
@@ -275,6 +288,7 @@ export default function DetailBar({
           <span>{new Date(days[days.length - 1].time * 1000).toLocaleDateString()}</span>
         </Box>
       )}
+      {isMobile && selection && <HistorySelectionSummary {...selection} />}
     </>
   )
 }

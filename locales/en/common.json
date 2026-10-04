@@ -55,6 +55,8 @@
   "Probe failure statistics": "Failure statistics:",
   "Probe no failures": "No retained failures",
   "Probe history": "Probe history",
+  "History selected range": "Period",
+  "History reachability": "Reachability",
   "Probe history coverage": "{{reported}} / {{total}} probes reported",
   "Probe bucket detail": "{{checks}} checks · {{failures}} failures · {{latency}} ms average",
   "Probe no samples": "No samples",

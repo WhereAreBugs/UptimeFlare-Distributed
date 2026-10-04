@@ -1,4 +1,4 @@
-import { Accordion, Badge, Box, Group, Modal, Stack, Table, Text, Tooltip } from '@mantine/core'
+import { Accordion, Badge, Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core'
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -19,6 +19,7 @@ import {
 import ProbeHistoryChart from './ProbeHistoryChart'
 import ProbeDailyHistory from './ProbeDailyHistory'
 import HistoryTimeline from './HistoryTimeline'
+import HistorySelectionSummary, { formatHistoryTimeRange } from './HistorySelectionSummary'
 import type { HistorySegment } from '@/util/history-segments'
 import { maintenances as fallbackMaintenances } from '@/uptime.config'
 
@@ -72,10 +73,7 @@ function ProbeHistory({
 }) {
   const { t } = useTranslation('common')
   const buckets = summarizeProbeHistory(probes, now)
-  const [selected, setSelected] = useState<{
-    segment: HistorySegment<MonitorStatus>
-    buckets: ReturnType<typeof summarizeProbeHistory>
-  } | null>(null)
+  const [selected, setSelected] = useState<HistorySegment<MonitorStatus> | null>(null)
   const label = (
     segment: HistorySegment<MonitorStatus>,
     members = buckets.slice(segment.firstIndex, segment.lastIndex + 1)
@@ -113,12 +111,12 @@ function ProbeHistory({
         height={24}
         color={(status) => historyColors[status]}
         label={label}
-        onSelect={(segment) =>
-          setSelected({
-            segment,
-            buckets: buckets.slice(segment.firstIndex, segment.lastIndex + 1),
-          })
+        compactLabel={(segment) =>
+          `${formatHistoryTimeRange(segment.startTime, segment.endTime)} · ${t(
+            statusLabels[segment.status]
+          )} · ${segment.avgLatencyMs === null ? '—' : `${segment.avgLatencyMs.toFixed(1)} ms`}`
         }
+        onSelect={setSelected}
       />
       <Group justify="space-between" mt={4}>
         <Text size="xs" c="dimmed">
@@ -128,33 +126,13 @@ function ProbeHistory({
           {t('Probe now')}
         </Text>
       </Group>
-      <Modal opened={selected !== null} onClose={() => setSelected(null)} title={name}>
-        {selected && (
-          <Stack gap="sm">
-            <Text size="sm">{label(selected.segment, selected.buckets)}</Text>
-            <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-              {selected.buckets.map((bucket) => (
-                <Text key={bucket.time} size="xs" mb="sm">
-                  {new Date(bucket.time * 1000).toLocaleString()}
-                  {' · '}
-                  {bucket.checks
-                    ? t('Probe bucket detail', {
-                        checks: bucket.checks,
-                        failures: bucket.failures,
-                        latency: bucket.avgLatencyMs?.toFixed(1) ?? '—',
-                      })
-                    : t('Probe no samples')}
-                  {bucket.total > 1 &&
-                    ` · ${t('Probe history coverage', {
-                      reported: bucket.reported,
-                      total: bucket.total,
-                    })}`}
-                </Text>
-              ))}
-            </div>
-          </Stack>
-        )}
-      </Modal>
+      {selected && (
+        <HistorySelectionSummary
+          range={formatHistoryTimeRange(selected.startTime, selected.endTime)}
+          reachability={t(statusLabels[selected.status])}
+          averageLatencyMs={selected.avgLatencyMs}
+        />
+      )}
     </div>
   )
 }
