@@ -7,7 +7,8 @@ import {
   IconPlayerPause,
 } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import type { MaintenanceConfig, MonitorTarget } from '@/types/config'
 import type { ProbeMonitorSummary, ProbeSummary } from '@/types/probes'
 import {
@@ -17,13 +18,15 @@ import {
   summarizeProbeDailyHistory,
   type MonitorStatus,
 } from '@/util/probe-status'
-import ProbeHistoryChart from './ProbeHistoryChart'
+const ProbeHistoryChart = dynamic(() => import('./ProbeHistoryChart'), { ssr: false })
 import ProbeDailyHistory from './ProbeDailyHistory'
 import HistoryTimeline from './HistoryTimeline'
 import HistorySelectionSummary, { formatHistoryTimeRange } from './HistorySelectionSummary'
 import type { HistorySegment } from '@/util/history-segments'
 import { categoryColors, getActiveMaintenance, getMonitorCategory } from '@/util/dashboard-status'
 import { maintenances as fallbackMaintenances } from '@/uptime.config'
+import usePublicHistory from './usePublicHistory'
+import { withProbeHistory } from '@/util/public-history-loader'
 
 const historyColors = { ...statusColors, degraded: '#eab308' }
 
@@ -64,7 +67,7 @@ function emptyProbe(id: string, index: number): ProbeSummary {
   }
 }
 
-function ProbeHistory({
+const ProbeHistory = memo(function ProbeHistory({
   probes,
   name,
   now,
@@ -74,7 +77,11 @@ function ProbeHistory({
   now: number
 }) {
   const { t } = useTranslation('common')
-  const buckets = summarizeProbeHistory(probes, now)
+  const bucketWindow = Math.floor(now / 300)
+  const buckets = useMemo(
+    () => summarizeProbeHistory(probes, bucketWindow * 300),
+    [probes, bucketWindow]
+  )
   const [selected, setSelected] = useState<HistorySegment<MonitorStatus> | null>(null)
   const label = (
     segment: HistorySegment<MonitorStatus>,
@@ -137,7 +144,7 @@ function ProbeHistory({
       )}
     </div>
   )
-}
+})
 
 function ProbeDetails({
   probe,
@@ -287,7 +294,31 @@ export default function ProbeMonitorDetail({
   const { t } = useTranslation('common')
   const [expandedMonitor, setExpandedMonitor] = useState<string | null>(null)
   const [expandedProbes, setExpandedProbes] = useState<string[]>([])
-  const current = summary ? refreshProbeSummary(summary, now, monitor) : undefined
+  const lazy = usePublicHistory(
+    monitor.id,
+    `${summary?.latest ?? 'none'}:${monitor.probes?.join(',') ?? ''}:${Math.floor(now / 300)}`,
+    summary?.historyLoaded === false,
+    expandedMonitor === monitor.id
+  )
+  const historical = useMemo(
+    () => withProbeHistory(summary, lazy.history?.summary),
+    [summary, lazy.history]
+  )
+  const current = useMemo(
+    () => (historical ? refreshProbeSummary(historical, now, monitor) : undefined),
+    [historical, now, monitor]
+  )
+  const showHistory = lazy.inView || expandedMonitor === monitor.id
+  const historyReady = historical?.historyLoaded !== false
+  const historyProbes = useMemo(
+    () => historical?.probes ?? monitor.probes?.map(emptyProbe) ?? [],
+    [historical, monitor.probes]
+  )
+  const day = Math.floor(now / 86400)
+  const days = useMemo(
+    () => (showHistory ? summarizeProbeDailyHistory(historyProbes, day * 86400) : []),
+    [historyProbes, day, showHistory]
+  )
   const paused = !!(monitor.paused || current?.paused || current?.status === 'paused')
   const status = current?.status === 'paused' ? 'unknown' : current?.status ?? 'unknown'
   const probes = current?.probes ?? monitor.probes?.map(emptyProbe) ?? []
@@ -298,146 +329,171 @@ export default function ProbeMonitorDetail({
     total: (current?.up ?? 0) + (current?.down ?? 0),
   }
   return (
-    <Accordion variant="default" mt="sm" value={expandedMonitor} onChange={setExpandedMonitor}>
-      <Accordion.Item value={monitor.id}>
-        <Accordion.Control>
-          <Group justify="space-between" gap="sm" wrap="wrap">
-            <Group gap={6}>
-              {paused ? (
-                <IconPlayerPause size={20} color={categoryColors.closed} aria-hidden />
-              ) : maintenance ? (
-                <IconAlertTriangle size={20} color="#fab005" aria-hidden />
+    <Box ref={lazy.ref}>
+      <Accordion
+        variant="default"
+        mt="sm"
+        value={expandedMonitor}
+        onChange={setExpandedMonitor}
+        transitionDuration={0}
+      >
+        <Accordion.Item value={monitor.id}>
+          <Accordion.Control>
+            <Group justify="space-between" gap="sm" wrap="wrap">
+              <Group gap={6}>
+                {paused ? (
+                  <IconPlayerPause size={20} color={categoryColors.closed} aria-hidden />
+                ) : maintenance ? (
+                  <IconAlertTriangle size={20} color="#fab005" aria-hidden />
+                ) : (
+                  <StatusIcon status={status} />
+                )}
+                <Tooltip label={monitor.tooltip} disabled={!monitor.tooltip}>
+                  <Text fw={700}>{monitor.name}</Text>
+                </Tooltip>
+              </Group>
+              <Group gap="xs">
+                <Badge
+                  color={paused || maintenance ? categoryColors[category] : statusColors[status]}
+                  variant="light"
+                >
+                  {t(paused ? 'Closed' : maintenance ? 'Maintenance' : statusLabels[status])}
+                </Badge>
+                {!paused && (
+                  <Text size="sm" c="dimmed">
+                    {t('Probe summary counts', totals)}
+                  </Text>
+                )}
+                <Text size="sm" fw={600}>
+                  {current?.uptimePercent === null || current?.uptimePercent === undefined
+                    ? t('No Data')
+                    : t('Overall', { percent: current.uptimePercent.toFixed(3) })}
+                </Text>
+              </Group>
+            </Group>
+          </Accordion.Control>
+          {showHistory && (
+            <Box px="md" pb="sm">
+              {paused && (
+                <Text size="xs" c="dimmed" mb={6}>
+                  {t('Monitor paused history')}
+                </Text>
+              )}
+              {historyReady ? (
+                <>
+                  <ProbeHistory
+                    probes={historyProbes}
+                    name={monitor.name}
+                    now={Math.floor(now / 300) * 300}
+                  />
+                  <Box mt="sm">
+                    <ProbeDailyHistory days={days} monitorId={monitor.id} />
+                  </Box>
+                </>
               ) : (
-                <StatusIcon status={status} />
-              )}
-              <Tooltip label={monitor.tooltip} disabled={!monitor.tooltip}>
-                <Text fw={700}>{monitor.name}</Text>
-              </Tooltip>
-            </Group>
-            <Group gap="xs">
-              <Badge
-                color={paused || maintenance ? categoryColors[category] : statusColors[status]}
-                variant="light"
-              >
-                {t(paused ? 'Closed' : maintenance ? 'Maintenance' : statusLabels[status])}
-              </Badge>
-              {!paused && (
-                <Text size="sm" c="dimmed">
-                  {t('Probe summary counts', totals)}
+                <Text size="xs" c="dimmed">
+                  {t(lazy.failed ? 'Probe history unavailable' : 'Probe history loading')}
                 </Text>
               )}
-              <Text size="sm" fw={600}>
-                {current?.uptimePercent === null || current?.uptimePercent === undefined
-                  ? t('No Data')
-                  : t('Overall', { percent: current.uptimePercent.toFixed(3) })}
-              </Text>
-            </Group>
-          </Group>
-        </Accordion.Control>
-        <Box px="md" pb="sm">
-          {paused && (
-            <Text size="xs" c="dimmed" mb={6}>
-              {t('Monitor paused history')}
-            </Text>
+            </Box>
           )}
-          <ProbeHistory probes={probes} name={monitor.name} now={now} />
-          <Box mt="sm">
-            <ProbeDailyHistory
-              days={summarizeProbeDailyHistory(probes, now)}
-              monitorId={monitor.id}
-            />
-          </Box>
-        </Box>
-        <Accordion.Panel>
-          {expandedMonitor === monitor.id && (
-            <>
-              {maintenance && (
-                <Text size="sm" c="yellow" mb="sm">
-                  {t('Probe scheduled maintenance')}
-                </Text>
-              )}
-              {!paused && status !== 'up' && (
-                <Text size="sm" c="dimmed" mb="sm">
-                  {t(
-                    status === 'down'
-                      ? 'Probe all unreachable'
-                      : status === 'degraded'
-                      ? 'Probe mixed explanation'
-                      : 'Probe unknown explanation'
-                  )}
-                </Text>
-              )}
-              {monitor.statusPageLink && (
-                <Text size="sm" mb="sm">
-                  <a href={monitor.statusPageLink} target="_blank" rel="noreferrer">
-                    {t('Probe open status page')}
-                  </a>
-                </Text>
-              )}
-              <Box mb="md">
-                <ProbeHistoryChart
-                  probes={probes}
-                  now={now}
-                  hideLatency={monitor.hideLatencyChart}
-                />
-              </Box>
-              <Accordion
-                multiple
-                variant="contained"
-                value={expandedProbes}
-                onChange={setExpandedProbes}
-              >
-                {probes.map((probe) => (
-                  <Accordion.Item key={probe.id} value={probe.id}>
-                    <Accordion.Control>
-                      <Group justify="space-between" gap="xs">
-                        <Group gap={6}>
-                          {paused ? (
-                            <IconPlayerPause size={20} color={categoryColors.closed} aria-hidden />
-                          ) : (
-                            <StatusIcon status={probe.status} />
-                          )}
-                          <Text fw={500}>{probe.name}</Text>
-                          {probe.location && (
-                            <Text size="xs" c="dimmed">
-                              {probe.location}
-                            </Text>
-                          )}
+          <Accordion.Panel>
+            {expandedMonitor === monitor.id && (
+              <>
+                {maintenance && (
+                  <Text size="sm" c="yellow" mb="sm">
+                    {t('Probe scheduled maintenance')}
+                  </Text>
+                )}
+                {!paused && status !== 'up' && (
+                  <Text size="sm" c="dimmed" mb="sm">
+                    {t(
+                      status === 'down'
+                        ? 'Probe all unreachable'
+                        : status === 'degraded'
+                        ? 'Probe mixed explanation'
+                        : 'Probe unknown explanation'
+                    )}
+                  </Text>
+                )}
+                {monitor.statusPageLink && (
+                  <Text size="sm" mb="sm">
+                    <a href={monitor.statusPageLink} target="_blank" rel="noreferrer">
+                      {t('Probe open status page')}
+                    </a>
+                  </Text>
+                )}
+                {historyReady && (
+                  <Box mb="md">
+                    <ProbeHistoryChart
+                      probes={historyProbes}
+                      now={Math.floor(now / 300) * 300}
+                      hideLatency={monitor.hideLatencyChart}
+                    />
+                  </Box>
+                )}
+                <Accordion
+                  multiple
+                  variant="contained"
+                  value={expandedProbes}
+                  onChange={setExpandedProbes}
+                >
+                  {probes.map((probe) => (
+                    <Accordion.Item key={probe.id} value={probe.id}>
+                      <Accordion.Control>
+                        <Group justify="space-between" gap="xs">
+                          <Group gap={6}>
+                            {paused ? (
+                              <IconPlayerPause
+                                size={20}
+                                color={categoryColors.closed}
+                                aria-hidden
+                              />
+                            ) : (
+                              <StatusIcon status={probe.status} />
+                            )}
+                            <Text fw={500}>{probe.name}</Text>
+                            {probe.location && (
+                              <Text size="xs" c="dimmed">
+                                {probe.location}
+                              </Text>
+                            )}
+                          </Group>
+                          <Badge
+                            color={paused ? categoryColors.closed : statusColors[probe.status]}
+                            variant="light"
+                          >
+                            {t(
+                              paused
+                                ? 'Historical result'
+                                : probe.stale
+                                ? 'Probe stale'
+                                : probe.latest === null
+                                ? 'Probe never reported'
+                                : statusLabels[probe.status]
+                            )}
+                          </Badge>
                         </Group>
-                        <Badge
-                          color={paused ? categoryColors.closed : statusColors[probe.status]}
-                          variant="light"
-                        >
-                          {t(
-                            paused
-                              ? 'Historical result'
-                              : probe.stale
-                              ? 'Probe stale'
-                              : probe.latest === null
-                              ? 'Probe never reported'
-                              : statusLabels[probe.status]
-                          )}
-                        </Badge>
-                      </Group>
-                    </Accordion.Control>
-                    <Accordion.Panel>
-                      {expandedProbes.includes(probe.id) && (
-                        <ProbeDetails
-                          probe={probe}
-                          now={now}
-                          hideLatency={monitor.hideLatencyChart}
-                          monitorId={monitor.id}
-                          historical={paused}
-                        />
-                      )}
-                    </Accordion.Panel>
-                  </Accordion.Item>
-                ))}
-              </Accordion>
-            </>
-          )}
-        </Accordion.Panel>
-      </Accordion.Item>
-    </Accordion>
+                      </Accordion.Control>
+                      <Accordion.Panel>
+                        {historyReady && expandedProbes.includes(probe.id) && (
+                          <ProbeDetails
+                            probe={probe}
+                            now={now}
+                            hideLatency={monitor.hideLatencyChart}
+                            monitorId={monitor.id}
+                            historical={paused}
+                          />
+                        )}
+                      </Accordion.Panel>
+                    </Accordion.Item>
+                  ))}
+                </Accordion>
+              </>
+            )}
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
+    </Box>
   )
 }

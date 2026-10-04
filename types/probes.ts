@@ -97,6 +97,8 @@ export type ProbeSummary = {
 }
 export type ProbeMonitorSummary = {
   monitorId: string
+  /** False for dashboard snapshots. Fetch this monitor's history before rendering historical data. */
+  historyLoaded?: boolean
   /** Older public responses omit this field; omission means active. */
   paused?: boolean
   status: 'up' | 'degraded' | 'down' | 'unknown' | 'paused'

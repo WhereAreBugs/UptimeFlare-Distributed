@@ -83,6 +83,12 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
         calls.probeReads++
         return summaries
       },
+      getProbeDashboardSummaries: async (_env, monitors) => {
+        const active = monitors.filter((monitor) => monitor.probes?.length && !monitor.paused)
+        if (!active.length) return {}
+        calls.probeReads++
+        return Object.fromEntries(active.map((monitor) => [monitor.id, summaries[monitor.id]]))
+      },
     },
     '@/worker/src/incident-history': {
       getNativeIncidents: async () => {
@@ -93,6 +99,11 @@ function loadHandler(name, workerConfig, summaries, initialUpdate = 0, nativeInc
     '@/worker/src/store': {
       getFromStore: async () => {
         calls.nativeReads++
+        return null
+      },
+      getPublicNativeState: async (_env, monitors) => {
+        if (monitors.some((monitor) => !monitor.paused && !monitor.probes?.length))
+          calls.nativeReads++
         return null
       },
       CompactedMonitorStateWrapper: EmptyNativeState,
@@ -124,6 +135,7 @@ const external = {
 }
 const makeSummary = (status) => ({
   monitorId: 'host',
+  historyLoaded: false,
   status,
   up: status === 'up' ? 1 : 0,
   down: status === 'down' ? 1 : 0,
@@ -173,7 +185,7 @@ test('unknown external results and absent native records are not operational', a
   assert.equal(value.monitors.native.up, null)
 })
 
-test('public paused results are closed before maintenance and expose historical data without live probe counts', async () => {
+test('public paused results are minimal closed stubs before maintenance without live counts or histories', async () => {
   const now = Math.floor(Date.now() / 1000)
   const monitors = [
     { ...external, paused: true },
@@ -220,7 +232,9 @@ test('public paused results are closed before maintenance and expose historical 
   assert.equal(value.monitors.host.unreachableProbes, null)
   assert.equal(value.monitors.host.unknownProbes, null)
   assert.equal(value.updatedAt, 1000, 'a paused target does not update live freshness')
-  assert.deepEqual(value.monitors.host.probes, pausedSummary.probes)
+  assert.equal(value.monitors.host.historyLoaded, false)
+  assert.equal(value.monitors.host.probes, undefined)
+  assert.equal(value.monitors.host.dailyHistory, undefined)
 })
 
 test('an entirely paused native installation can return closed before its first state record', async () => {
@@ -235,6 +249,20 @@ test('an entirely paused native installation can return closed before its first 
   assert.equal(value.closed, 1)
   assert.equal(value.abnormal, 0)
   assert.equal(value.monitors.host.up, null)
+})
+
+test('public dashboard returns explicitly unloaded history and skips native reads for all-external targets', async () => {
+  const { handler, calls } = loadHandler(
+    'data',
+    { monitors: [external] },
+    { host: makeSummary('up') }
+  )
+  const value = await (await handler(request('/api/data'))).json()
+  assert.equal(value.monitors.host.historyLoaded, false)
+  assert.deepEqual(calls, { nativeReads: 0, probeReads: 1 })
+  const paused = loadHandler('data', { monitors: [{ ...external, paused: true }] }, {})
+  await paused.handler(request('/api/data'))
+  assert.deepEqual(paused.calls, { nativeReads: 0, probeReads: 0 })
 })
 
 test('native public errors expose phase fields and preserve historical message text', async () => {

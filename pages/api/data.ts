@@ -1,9 +1,9 @@
 import { workerConfig as fallbackConfig } from '@/uptime.config'
 import { getPresentationSettings, expandMaintenances } from '@/util/maintenance'
 import { NextRequest } from 'next/server'
-import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
+import { CompactedMonitorStateWrapper, getPublicNativeState } from '@/worker/src/store'
 import { getRuntimeConfig } from '@/worker/src/settings'
-import { getProbeSummaries } from '@/worker/src/probes'
+import { getProbeDashboardSummaries } from '@/worker/src/probes'
 import { parseNativeDiagnostic } from '@/worker/src/diagnostics'
 import { getMonitorStaleAfterSeconds } from '@/util/monitor-settings'
 import { getMonitorCategory } from '@/util/dashboard-status'
@@ -27,8 +27,8 @@ export default async function handler(req: NextRequest): Promise<Response> {
     })
   const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
   const [stateStr, probeSummaries] = await Promise.all([
-    getFromStore(process.env as any, 'state'),
-    getProbeSummaries(
+    getPublicNativeState(process.env as any, workerConfig.monitors),
+    getProbeDashboardSummaries(
       process.env as any,
       workerConfig.monitors,
       workerConfig.probes,
@@ -59,6 +59,21 @@ export default async function handler(req: NextRequest): Promise<Response> {
   let updatedAt = 0
 
   for (let monitor of workerConfig.monitors) {
+    if (monitor.paused) {
+      counts.paused++
+      categories.closed++
+      monitors[monitor.id] = {
+        status: 'paused',
+        paused: true,
+        category: 'closed',
+        up: null,
+        reachableProbes: null,
+        unreachableProbes: null,
+        unknownProbes: null,
+        historyLoaded: false,
+      }
+      continue
+    }
     if (monitor.probes?.length) {
       const summary = probeSummaries[monitor.id]
       const paused = !!(monitor.paused || summary.paused || summary.status === 'paused')

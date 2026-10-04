@@ -121,5 +121,6 @@
   "Monitor totals": "Monitor totals",
   "Monitor paused history": "Monitoring is paused. Previous results remain available.",
   "Historical result": "Historical result",
-  "Pause or resume changes apply after saving the configuration.": "Pause or resume changes apply after saving the configuration."
+  "Pause or resume changes apply after saving the configuration.": "Pause or resume changes apply after saving the configuration.",
+  "Probe history unavailable": "History is temporarily unavailable."
 }

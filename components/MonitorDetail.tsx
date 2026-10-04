@@ -1,4 +1,6 @@
-import { Badge, Group, Text, Tooltip } from '@mantine/core'
+import { Accordion, Badge, Group, Text, Tooltip } from '@mantine/core'
+import dynamic from 'next/dynamic'
+import { useMemo, useState } from 'react'
 import { MaintenanceConfig, MonitorState, MonitorTarget } from '@/types/config'
 import {
   IconAlertCircle,
@@ -7,8 +9,8 @@ import {
   IconHelpCircle,
   IconPlayerPause,
 } from '@tabler/icons-react'
-import DetailChart from './DetailChart'
-import DetailBar from './DetailBar'
+const DetailChart = dynamic(() => import('./DetailChart'), { ssr: false })
+const DetailBar = dynamic(() => import('./DetailBar'), { ssr: false })
 import { getColor } from '@/util/color'
 import { maintenances as fallbackMaintenances } from '@/uptime.config'
 import { useTranslation } from 'react-i18next'
@@ -16,6 +18,8 @@ import type { ProbeMonitorSummary } from '@/types/probes'
 import ProbeMonitorDetail from './ProbeMonitorDetail'
 import { getMonitorStatus, statusColors } from '@/util/probe-status'
 import { categoryColors, categoryLabels, getMonitorCategory } from '@/util/dashboard-status'
+import { CompactedMonitorStateWrapper } from '@/worker/src/store'
+import usePublicHistory from './usePublicHistory'
 
 export default function MonitorDetail({
   monitor,
@@ -23,14 +27,33 @@ export default function MonitorDetail({
   probeSummaries = {},
   now = Math.round(Date.now() / 1000),
   maintenances = fallbackMaintenances,
+  nativeHistoryLoaded = true,
 }: {
   monitor: MonitorTarget
   state: MonitorState
   probeSummaries?: Record<string, ProbeMonitorSummary>
   now?: number
   maintenances?: MaintenanceConfig[]
+  nativeHistoryLoaded?: boolean
 }) {
   const { t } = useTranslation('common')
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const native = !monitor.probes?.length
+  const lazy = usePublicHistory(
+    monitor.id,
+    `${state.latency[monitor.id]?.slice(-1)[0]?.time ?? 'none'}:${Math.floor(now / 300)}`,
+    native && !nativeHistoryLoaded,
+    expanded === monitor.id,
+    false
+  )
+  const nativeState = useMemo(
+    () =>
+      lazy.history?.historyLoaded
+        ? new CompactedMonitorStateWrapper(lazy.history.compactedStateStr ?? null).uncompact()
+        : state,
+    [lazy.history, state]
+  )
+  const historyReady = nativeHistoryLoaded || !!lazy.history?.historyLoaded
 
   if (monitor.probes?.length)
     return (
@@ -42,10 +65,10 @@ export default function MonitorDetail({
       />
     )
 
-  const incidents = state.incident[monitor.id]
+  const incidents = nativeState.incident[monitor.id]
   const status = getMonitorStatus(monitor, state, probeSummaries, now)
   const category = getMonitorCategory(monitor, status, maintenances, now)
-  if (!state.latency[monitor.id]?.length || !incidents?.length)
+  if (!nativeState.latency[monitor.id]?.length || !incidents?.length)
     return (
       <>
         <Group mt="sm" justify="space-between">
@@ -113,48 +136,72 @@ export default function MonitorDetail({
   // Conditionally render monitor name with or without hyperlink based on monitor.url presence
   const monitorNameElement = (
     <Text mt="sm" fw={700} style={{ display: 'inline-flex', alignItems: 'center' }}>
-      {monitor.statusPageLink ? (
-        <a
-          href={monitor.statusPageLink}
-          target="_blank"
-          rel="noreferrer"
-          style={{ display: 'inline-flex', alignItems: 'center', color: 'inherit' }}
-        >
-          {statusIcon} {monitor.name}
-        </a>
-      ) : (
-        <>
-          {statusIcon} {monitor.name}
-        </>
-      )}
+      {statusIcon} {monitor.name}
     </Text>
   )
 
   return (
-    <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        {monitor.tooltip ? (
-          <Tooltip label={monitor.tooltip}>{monitorNameElement}</Tooltip>
-        ) : (
-          monitorNameElement
-        )}
+    <Accordion
+      value={expanded}
+      onChange={setExpanded}
+      variant="default"
+      mt="sm"
+      transitionDuration={0}
+    >
+      <Accordion.Item value={monitor.id}>
+        <Accordion.Control>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}
+          >
+            {monitor.tooltip ? (
+              <Tooltip label={monitor.tooltip}>{monitorNameElement}</Tooltip>
+            ) : (
+              monitorNameElement
+            )}
 
-        <Group gap="xs" mt="sm">
-          <Badge color={categoryColors[category]} variant="light">
-            {t(categoryLabels[category])}
-          </Badge>
-          <Text fw={700} style={{ display: 'inline', color: getColor(uptimePercent, true) }}>
-            {t('Overall', { percent: uptimePercent })}
-          </Text>
-        </Group>
-      </div>
-      {monitor.paused && (
-        <Text size="xs" c="dimmed" mt={6}>
-          {t('Monitor paused history')}
-        </Text>
-      )}
-      <DetailBar monitor={monitor} state={state} />
-      {!monitor.hideLatencyChart && <DetailChart monitor={monitor} state={state} />}
-    </>
+            <Group gap="xs" mt="sm">
+              <Badge color={categoryColors[category]} variant="light">
+                {t(categoryLabels[category])}
+              </Badge>
+              {historyReady && (
+                <Text fw={700} style={{ display: 'inline', color: getColor(uptimePercent, true) }}>
+                  {t('Overall', { percent: uptimePercent })}
+                </Text>
+              )}
+            </Group>
+          </div>
+        </Accordion.Control>
+        <Accordion.Panel>
+          {expanded === monitor.id && (
+            <>
+              {monitor.statusPageLink && (
+                <Text size="sm" mb="sm">
+                  <a href={monitor.statusPageLink} target="_blank" rel="noreferrer">
+                    {t('Probe open status page')}
+                  </a>
+                </Text>
+              )}
+              {monitor.paused && (
+                <Text size="xs" c="dimmed" mt={6}>
+                  {t('Monitor paused history')}
+                </Text>
+              )}
+              {historyReady ? (
+                <>
+                  <DetailBar monitor={monitor} state={nativeState} />
+                  {!monitor.hideLatencyChart && (
+                    <DetailChart monitor={monitor} state={nativeState} />
+                  )}
+                </>
+              ) : (
+                <Text size="sm" c="dimmed">
+                  {t(lazy.failed ? 'Probe history unavailable' : 'Probe history loading')}
+                </Text>
+              )}
+            </>
+          )}
+        </Accordion.Panel>
+      </Accordion.Item>
+    </Accordion>
   )
 }

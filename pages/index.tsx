@@ -10,8 +10,9 @@ import { Text } from '@mantine/core'
 import MonitorDetail from '@/components/MonitorDetail'
 import Footer from '@/components/Footer'
 import { useTranslation } from 'react-i18next'
-import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
-import { getProbeSummaries } from '@/worker/src/probes'
+import { CompactedMonitorStateWrapper, getPublicNativeState } from '@/worker/src/store'
+import { getProbeDashboardSummaries } from '@/worker/src/probes'
+import { visiblePublicMonitors } from '@/util/public-monitor-list'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import { summarizeDashboardMonitors } from '@/util/dashboard-status'
 import { useEffect, useMemo, useState } from 'react'
@@ -28,12 +29,14 @@ export default function Home({
   probeSummaries = {},
   page = initialPage,
   maintenances: plans = initialMaintenances,
+  nativeHistoryLoaded = true,
 }: {
   compactedStateStr: string | null
   monitors: MonitorTarget[]
   probeSummaries?: Record<string, ProbeMonitorSummary>
   page?: PageConfig
   maintenances?: MaintenanceConfig[]
+  nativeHistoryLoaded?: boolean
 }) {
   const { t } = useTranslation('common')
   const router = useRouter()
@@ -43,6 +46,10 @@ export default function Home({
   )
   const [now, setNow] = useState(() => Math.round(Date.now() / 1000))
   const [monitorId, setMonitorId] = useState('')
+  const activeMonitors = useMemo(
+    () => visiblePublicMonitors(monitors, probeSummaries),
+    [monitors, probeSummaries]
+  )
   const windowMinute = Math.floor(now / 60)
   const maintenances = useMemo(
     () => expandMaintenances(plans, windowMinute * 60 - 7 * 86400, windowMinute * 60 + 30 * 86400),
@@ -52,10 +59,15 @@ export default function Home({
     const updateHash = () => setMonitorId(window.location.hash.substring(1))
     updateHash()
     window.addEventListener('hashchange', updateHash)
-    const timer = setInterval(() => setNow(Math.round(Date.now() / 1000)), 15000)
+    const updateTime = () => {
+      if (!document.hidden) setNow(Math.round(Date.now() / 1000))
+    }
+    const timer = setInterval(updateTime, 60000)
+    document.addEventListener('visibilitychange', updateTime)
     return () => {
       window.removeEventListener('hashchange', updateHash)
       clearInterval(timer)
+      document.removeEventListener('visibilitychange', updateTime)
     }
   }, [])
   useEffect(() => {
@@ -75,19 +87,19 @@ export default function Home({
     const onVisible = () => {
       if (!document.hidden) void refresh()
     }
-    const refreshEverySeconds = Math.min(300, ...monitors.map(getMonitorIntervalSeconds))
+    const refreshEverySeconds = Math.min(300, ...activeMonitors.map(getMonitorIntervalSeconds))
     const timer = setInterval(() => void refresh(), refreshEverySeconds * 1000)
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [router, monitors])
+  }, [router, activeMonitors])
   const aggregate = summarizeDashboardMonitors(monitors, state, probeSummaries, maintenances, now)
 
   // Specify monitorId in URL hash to view a specific monitor (can be used in iframe)
   if (monitorId) {
-    const monitor = monitors.find((monitor) => monitor.id === monitorId)
+    const monitor = activeMonitors.find((monitor) => monitor.id === monitorId)
     if (!monitor || !state) {
       return <Text fw={700}>{t('Probe monitor unavailable')}</Text>
     }
@@ -99,6 +111,7 @@ export default function Home({
           probeSummaries={probeSummaries}
           now={now}
           maintenances={maintenances}
+          nativeHistoryLoaded={nativeHistoryLoaded}
         />
       </div>
     )
@@ -129,6 +142,7 @@ export default function Home({
             now={now}
             page={page}
             maintenances={maintenances}
+            nativeHistoryLoaded={nativeHistoryLoaded}
           />
         </div>
 
@@ -144,8 +158,8 @@ export async function getServerSideProps() {
   const workerConfig = await getRuntimeConfig(process.env as any, fallbackConfig)
   // Read state as string from storage, to avoid hitting server-side cpu time limit
   const [compactedStateStr, probeSummaries] = await Promise.all([
-    getFromStore(process.env as any, 'state'),
-    getProbeSummaries(
+    getPublicNativeState(process.env as any, workerConfig.monitors),
+    getProbeDashboardSummaries(
       process.env as any,
       workerConfig.monitors,
       workerConfig.probes,
@@ -172,6 +186,7 @@ export async function getServerSideProps() {
       compactedStateStr,
       monitors,
       probeSummaries,
+      nativeHistoryLoaded: false,
       ...getPresentationSettings(workerConfig),
     },
   }

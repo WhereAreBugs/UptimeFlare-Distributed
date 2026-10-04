@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
-import { CompactedMonitorStateWrapper, getFromStore } from '@/worker/src/store'
-import { getProbeSummaries } from '@/worker/src/probes'
+import { CompactedMonitorStateWrapper, getPublicNativeState } from '@/worker/src/store'
+import { getProbeDashboardSummaries } from '@/worker/src/probes'
 import type { MonitorStatus } from '@/util/probe-status'
 import { getMonitorStaleAfterSeconds } from '@/util/monitor-settings'
 
@@ -69,7 +69,7 @@ export default async function handler(req: NextRequest): Promise<Response> {
       )
     let status: MonitorStatus = 'unknown'
     if (monitor.probes?.length) {
-      const summaries = await getProbeSummaries(
+      const summaries = await getProbeDashboardSummaries(
         process.env as any,
         [monitor],
         workerConfig.probes,
@@ -79,7 +79,7 @@ export default async function handler(req: NextRequest): Promise<Response> {
       status = summary.status === 'paused' ? 'unknown' : summary.status
     } else {
       const compactedState = new CompactedMonitorStateWrapper(
-        await getFromStore(process.env as any, 'state')
+        await getPublicNativeState(process.env as any, [monitor])
       )
       const incidentCount = compactedState.incidentLen(monitorId)
       const lastIncident = incidentCount

@@ -121,5 +121,6 @@
   "Monitor totals": "监控数量",
   "Monitor paused history": "监控已暂停，以下保留历史结果。",
   "Historical result": "历史结果",
-  "Pause or resume changes apply after saving the configuration.": "暂停或恢复在保存配置后生效。"
+  "Pause or resume changes apply after saving the configuration.": "暂停或恢复在保存配置后生效。",
+  "Probe history unavailable": "历史暂时不可用。"
 }

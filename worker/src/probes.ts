@@ -104,7 +104,8 @@ function authenticate(request: Request, env: ProbeEnv): string {
 function assignedMonitors(monitors: MonitorTarget[], probeId: string): MonitorTarget[] {
   if (
     monitors.length > 100 ||
-    monitors.reduce((total, monitor) => total + (monitor.probes?.length || 0), 0) > MAX_MONITOR_PROBE_ASSIGNMENTS ||
+    monitors.reduce((total, monitor) => total + (monitor.probes?.length || 0), 0) >
+      MAX_MONITOR_PROBE_ASSIGNMENTS ||
     new Set(monitors.map((m) => m.id)).size !== monitors.length
   ) {
     throw new ProbeRequestError(503, 'Invalid monitor configuration')
@@ -487,33 +488,35 @@ export async function handleProbeRequest(
       return json({
         version: 1,
         probe_id: probeId,
-        monitors: assigned.filter(monitor => !monitor.paused).map((monitor) => ({
-          id: monitor.id,
-          method: monitor.method,
-          target: monitor.target,
-          intervalSeconds: getMonitorIntervalSeconds(monitor),
-          timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
-          ...(monitor.method === 'SSL_CERT' && {
-            certificateExpiryDays: monitor.certificateExpiryDays ?? 14,
-          }),
-          ...(monitor.icmpProxyURL && { icmpProxyURL: monitor.icmpProxyURL }),
-          ...(monitor.checkProxy && { checkProxy: monitor.checkProxy }),
-          ...(monitor.checkProxyFallback !== undefined && {
-            checkProxyFallback: monitor.checkProxyFallback,
-          }),
-          ...(monitor.checkProxyHeaders && { checkProxyHeaders: monitor.checkProxyHeaders }),
-          ...(monitor.headers && {
-            headers: Object.fromEntries(
-              Object.entries(monitor.headers).map(([key, value]) => [key, String(value)])
-            ),
-          }),
-          ...(monitor.body !== undefined && { body: monitor.body }),
-          ...(monitor.expectedCodes && { expectedCodes: monitor.expectedCodes }),
-          ...(monitor.responseKeyword && { responseKeyword: monitor.responseKeyword }),
-          ...(monitor.responseForbiddenKeyword && {
-            responseForbiddenKeyword: monitor.responseForbiddenKeyword,
-          }),
-        })),
+        monitors: assigned
+          .filter((monitor) => !monitor.paused)
+          .map((monitor) => ({
+            id: monitor.id,
+            method: monitor.method,
+            target: monitor.target,
+            intervalSeconds: getMonitorIntervalSeconds(monitor),
+            timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+            ...(monitor.method === 'SSL_CERT' && {
+              certificateExpiryDays: monitor.certificateExpiryDays ?? 14,
+            }),
+            ...(monitor.icmpProxyURL && { icmpProxyURL: monitor.icmpProxyURL }),
+            ...(monitor.checkProxy && { checkProxy: monitor.checkProxy }),
+            ...(monitor.checkProxyFallback !== undefined && {
+              checkProxyFallback: monitor.checkProxyFallback,
+            }),
+            ...(monitor.checkProxyHeaders && { checkProxyHeaders: monitor.checkProxyHeaders }),
+            ...(monitor.headers && {
+              headers: Object.fromEntries(
+                Object.entries(monitor.headers).map(([key, value]) => [key, String(value)])
+              ),
+            }),
+            ...(monitor.body !== undefined && { body: monitor.body }),
+            ...(monitor.expectedCodes && { expectedCodes: monitor.expectedCodes }),
+            ...(monitor.responseKeyword && { responseKeyword: monitor.responseKeyword }),
+            ...(monitor.responseForbiddenKeyword && {
+              responseForbiddenKeyword: monitor.responseForbiddenKeyword,
+            }),
+          })),
       })
     }
     const batch = validateBatch(await readBatch(request), assigned, Math.floor(Date.now() / 1000))
@@ -610,18 +613,20 @@ type Bucket = {
 }
 type Day = Bucket & { latency_checks: number }
 
-export async function getProbeSummaries(
+async function readProbeSummaries(
   env: ProbeEnv,
   monitors: MonitorTarget[],
   definitions: ProbeDefinition[] = [],
-  now = Math.floor(Date.now() / 1000)
+  now = Math.floor(Date.now() / 1000),
+  dashboard = false
 ): Promise<Record<string, ProbeMonitorSummary>> {
-  const external = monitors.filter((m) => m.probes?.length)
+  const external = monitors.filter((m) => m.probes?.length && (!dashboard || !m.paused))
   if (!external.length) return {}
   if (
     external.length > 100 ||
     definitions.length > 33 ||
-    external.reduce((total, m) => total + (m.probes?.length || 0), 0) > MAX_MONITOR_PROBE_ASSIGNMENTS ||
+    external.reduce((total, m) => total + (m.probes?.length || 0), 0) >
+      MAX_MONITOR_PROBE_ASSIGNMENTS ||
     external.some((m) => (m.probes?.length || 0) > 33)
   ) {
     throw new Error('Probe display configuration exceeds limits')
@@ -633,13 +638,17 @@ export async function getProbeSummaries(
   const allowedPairs = `SELECT json_extract(value,'$.probe_id'),json_extract(value,'$.monitor_id') FROM json_each(?)`
   const scope = `(probe_id,monitor_id) IN (${allowedPairs})`
   const latestScope = `(l.probe_id,l.monitor_id) IN (${allowedPairs})`
-  const [latestData, totalsData, historyData, stagesData, failuresData, dailyData] =
-    await env.UPTIMEFLARE_D1.batch([
-      env.UPTIMEFLARE_D1.prepare(
-        `SELECT l.*,d.details FROM probe_latest l LEFT JOIN probe_sample_details d
+  const statements = [
+    env.UPTIMEFLARE_D1.prepare(
+      `SELECT ${
+        dashboard ? 'l.probe_id,l.monitor_id,l.time,l.up,l.latency_ms,l.stage,l.code' : 'l.*'
+      },d.details FROM probe_latest l LEFT JOIN probe_sample_details d
         ON d.probe_id=l.probe_id AND d.monitor_id=l.monitor_id AND d.time=l.time WHERE ${latestScope}`
-      ).bind(assignments),
-      env.UPTIMEFLARE_D1.prepare(`SELECT * FROM probe_totals WHERE ${scope}`).bind(assignments),
+    ).bind(assignments),
+    env.UPTIMEFLARE_D1.prepare(`SELECT * FROM probe_totals WHERE ${scope}`).bind(assignments),
+  ]
+  if (!dashboard)
+    statements.push(
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_buckets WHERE ${scope} AND time>=? AND time<=? ORDER BY time`
       ).bind(assignments, Math.floor((now - 12 * 60 * 60) / 300) * 300, now),
@@ -656,8 +665,17 @@ export async function getProbeSummaries(
       ).bind(now - RETENTION_SECONDS, assignments),
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_days WHERE ${scope} AND time>=? AND time<=? AND checks>0 ORDER BY time`
-      ).bind(assignments, Math.floor((now - RETENTION_SECONDS) / 86400) * 86400, now),
-    ])
+      ).bind(assignments, Math.floor((now - RETENTION_SECONDS) / 86400) * 86400, now)
+    )
+  const empty = { success: true, results: [] }
+  const [
+    latestData,
+    totalsData,
+    historyData = empty,
+    stagesData = empty,
+    failuresData = empty,
+    dailyData = empty,
+  ] = await env.UPTIMEFLARE_D1.batch(statements)
   if (
     [latestData, totalsData, historyData, stagesData, failuresData, dailyData].some(
       (r) => !r.success
@@ -747,6 +765,8 @@ export async function getProbeSummaries(
           ? latest
             ? 'Probe has not reported a recent result'
             : 'Waiting for the first probe result'
+          : dashboard
+          ? undefined
           : latest?.message || undefined,
         checks: totals?.checks ?? 0,
         failures: totals?.failures ?? 0,
@@ -775,6 +795,7 @@ export async function getProbeSummaries(
     )
     summaries[monitor.id] = {
       monitorId: monitor.id,
+      historyLoaded: !dashboard,
       paused: !!monitor.paused,
       status: monitor.paused ? 'paused' : aggregateStatus(up, down, unknown),
       up,
@@ -782,13 +803,33 @@ export async function getProbeSummaries(
       unknown,
       total: probes.length,
       latest: latestTimes.length ? Math.max(...latestTimes) : null,
-      dailyHistory: summarizeProbeDailyHistory(probes, now),
+      dailyHistory: dashboard ? [] : summarizeProbeDailyHistory(probes, now),
       uptimePercent: checks ? (100 * (checks - failureCount)) / checks : null,
       retainedFrom: starts.length ? Math.min(...starts) : null,
       probes,
     }
   }
   return summaries
+}
+
+/** Full retained history, scoped by callers to the monitor being viewed. */
+export function getProbeSummaries(
+  env: ProbeEnv,
+  monitors: MonitorTarget[],
+  definitions: ProbeDefinition[] = [],
+  now = Math.floor(Date.now() / 1000)
+): Promise<Record<string, ProbeMonitorSummary>> {
+  return readProbeSummaries(env, monitors, definitions, now)
+}
+
+/** Dashboard reads two bounded tables and never scans historical rows or paused assignments. */
+export function getProbeDashboardSummaries(
+  env: ProbeEnv,
+  monitors: MonitorTarget[],
+  definitions: ProbeDefinition[] = [],
+  now = Math.floor(Date.now() / 1000)
+): Promise<Record<string, ProbeMonitorSummary>> {
+  return readProbeSummaries(env, monitors, definitions, now, true)
 }
 
 export type ProbeIncidentQuery = {
@@ -832,7 +873,8 @@ export async function getProbeIncidents(
       .probes!.filter((id) => !query.probeId || query.probeId === id)
       .map((probe_id) => ({ probe_id, monitor_id: monitor.id }))
   )
-  if (pairs.length > MAX_MONITOR_PROBE_ASSIGNMENTS) throw new Error('Probe display configuration exceeds limits')
+  if (pairs.length > MAX_MONITOR_PROBE_ASSIGNMENTS)
+    throw new Error('Probe display configuration exceeds limits')
   if (query.probeId && !pairs.length) throw new Error('Unknown probe assignment')
   let cursor: [number, string, string] = [to, '\uffff', '\uffff']
   if (query.cursor) {

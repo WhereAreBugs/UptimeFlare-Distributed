@@ -4,6 +4,7 @@ import {
   LatencyRecord,
   MonitorState,
   MonitorStateCompacted,
+  MonitorTarget,
 } from '../../types/config'
 
 export async function getFromStore(
@@ -24,6 +25,51 @@ export async function setToStore(
     'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;'
   )
   await stmt.bind(key, value).run()
+}
+
+/** Scope native state before public serialization, optionally keeping only the latest observation. */
+export async function getPublicNativeState(
+  env: Pick<Env, 'UPTIMEFLARE_D1'>,
+  monitors: MonitorTarget[],
+  history = false
+): Promise<string | null> {
+  const ids = new Set(
+    monitors
+      .filter((monitor) => !monitor.paused && !monitor.probes?.length)
+      .map((monitor) => monitor.id)
+  )
+  if (!ids.size) return null
+  const stored = await getFromStore(env, 'state')
+  if (!stored) return null
+  const source = JSON.parse(stored) as MonitorStateCompacted
+  const state: MonitorStateCompacted = {
+    lastUpdate: source.lastUpdate,
+    overallUp: 0,
+    overallDown: 0,
+    incident: {},
+    latency: {},
+  }
+  for (const id of Array.from(ids)) {
+    const incident = source.incident[id]
+    const latency = source.latency[id]
+    if (incident)
+      state.incident[id] = history
+        ? incident
+        : {
+            start: incident.start.slice(-1).map((times) => times.slice(-1)),
+            end: incident.end.slice(-1),
+            error: incident.error.slice(-1).map((errors) => errors.slice(-1)),
+          }
+    if (latency)
+      state.latency[id] = history
+        ? latency
+        : {
+            time: latency.time.slice(-8),
+            ping: latency.ping.slice(-4),
+            loc: { v: latency.loc.v.slice(-1), c: latency.time.length ? [1] : [] },
+          }
+  }
+  return JSON.stringify(state)
 }
 
 export class CompactedMonitorStateWrapper {

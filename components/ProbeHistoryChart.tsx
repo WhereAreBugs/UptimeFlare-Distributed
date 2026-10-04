@@ -1,5 +1,5 @@
 import { SegmentedControl, Stack, Text } from '@mantine/core'
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -18,7 +18,7 @@ import { summarizeProbeDailyHistory, summarizeProbeHistory } from '@/util/probe-
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, TimeScale)
 
 /** Deliberately mounted only inside an expanded monitor/probe panel. */
-export default function ProbeHistoryChart({
+export default memo(function ProbeHistoryChart({
   probes,
   now,
   hideLatency,
@@ -112,4 +112,4 @@ export default function ProbeHistoryChart({
       </Text>
     </Stack>
   )
-}
+})

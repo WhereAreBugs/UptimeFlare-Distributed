@@ -1,7 +1,7 @@
 import { getMonitorStaleAfterSeconds } from '../../util/monitor-settings'
 import type { MonitorTarget, SingleWebhook, WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
-import { getProbeSummaries } from './probes'
+import { getProbeDashboardSummaries } from './probes'
 import { CompactedMonitorStateWrapper, getFromStore } from './store'
 import pLimit from 'p-limit'
 import { expandMaintenances, maintenanceTime, getPresentationSettings } from '../../util/maintenance'
@@ -315,7 +315,7 @@ export async function runNotifications(
   if (cleanup.some((result) => !result.success)) throw new Error('Notification cleanup failed')
   if (!monitors.length) return
   const suppressed = suppressedMonitors(config, now)
-  const summaries = await getProbeSummaries(env, monitors, config.probes, now)
+  const summaries = await getProbeDashboardSummaries(env, monitors, config.probes, now)
   const native = monitors.some((monitor) => !monitor.probes?.length)
     ? new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
     : null

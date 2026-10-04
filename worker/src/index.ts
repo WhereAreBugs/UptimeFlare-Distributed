@@ -12,6 +12,7 @@ import { runCloudflareProbe } from './cloudflare-probe'
 import { MAX_SCHEDULED_TARGETS_PER_CRON } from './limits'
 import { runNotifications } from './notifications'
 import { handleManagementRequest } from './management'
+import { handlePublicHistoryRequest } from './history'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
@@ -28,6 +29,8 @@ const Worker = {
     if (new URL(request.url).pathname.startsWith('/api/manage/'))
       return handleManagementRequest(request, env, fallbackConfig)
     const workerConfig = await getRuntimeConfig(env, fallbackConfig)
+    if (new URL(request.url).pathname === '/api/history')
+      return handlePublicHistoryRequest(request, env, workerConfig)
     return handleProbeRequest(
       request,
       env,

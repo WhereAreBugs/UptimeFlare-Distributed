@@ -1,5 +1,5 @@
 import { Group, Text } from '@mantine/core'
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProbeDailyBucket } from '@/types/probes'
 import { statusColors, type MonitorStatus } from '@/util/probe-status'
@@ -14,7 +14,7 @@ const statusLabels: Record<MonitorStatus, string> = {
   unknown: 'Probe unknown',
 }
 
-export default function ProbeDailyHistory({
+export default memo(function ProbeDailyHistory({
   days,
   monitorId,
 }: {
@@ -80,4 +80,4 @@ export default function ProbeDailyHistory({
       )}
     </div>
   )
-}
+})

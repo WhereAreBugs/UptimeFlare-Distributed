@@ -37,6 +37,8 @@ jobs:
       - run: npx --no-install @cloudflare/next-on-pages
       - name: Verify management API in the Pages deployment artifact
         run: node scripts/management-smoke.mjs
+      - name: Verify dashboard scale and lazy history in the Pages deployment artifact
+        run: node scripts/dashboard-smoke.mjs
       - name: Prepare shared D1, Pages bindings and deployment config
         run: python3 deploy/provision.py prepare
         env:

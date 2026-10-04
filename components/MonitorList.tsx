@@ -1,11 +1,11 @@
-import { MaintenanceConfig, MonitorState, MonitorTarget, PageConfig } from '@/types/config'
-import { Accordion, Card, Center, Text } from '@mantine/core'
+import type { MaintenanceConfig, MonitorState, MonitorTarget, PageConfig } from '@/types/config'
+import { Accordion, Card, Center, Pagination, Stack, Text } from '@mantine/core'
 import MonitorDetail from './MonitorDetail'
 import {
   pageConfig as fallbackPageConfig,
   maintenances as fallbackMaintenances,
 } from '@/uptime.config'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProbeMonitorSummary } from '@/types/probes'
 import {
@@ -15,6 +15,11 @@ import {
   summarizeDashboardMonitors,
   type MonitorCategory,
 } from '@/util/dashboard-status'
+import {
+  publicMonitorGroups,
+  publicMonitorPage,
+  visiblePublicMonitors,
+} from '@/util/public-monitor-list'
 
 export default function MonitorList({
   monitors,
@@ -23,6 +28,7 @@ export default function MonitorList({
   now = Math.round(Date.now() / 1000),
   page = fallbackPageConfig,
   maintenances = fallbackMaintenances,
+  nativeHistoryLoaded = true,
 }: {
   monitors: MonitorTarget[]
   state: MonitorState
@@ -30,25 +36,20 @@ export default function MonitorList({
   now?: number
   page?: PageConfig
   maintenances?: MaintenanceConfig[]
+  nativeHistoryLoaded?: boolean
 }) {
   const { t } = useTranslation('common')
-  const group = { ...page.group }
-  if (Object.keys(group).length) {
-    const ungrouped = monitors.filter(
-      (monitor) => !Object.values(group).some((ids) => ids.includes(monitor.id))
-    )
-    if (ungrouped.length) {
-      let name = t('Probe other monitors')
-      let suffix = 2
-      while (Object.hasOwn(group, name)) name = `${t('Probe other monitors')} (${suffix++})`
-      group[name] = ungrouped.map((monitor) => monitor.id)
-    }
-  }
-  const groupedMonitor = group && Object.keys(group).length > 0
-  let content
-
-  // Load expanded groups from localStorage
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(Object.keys(group))
+  const active = useMemo(
+    () => visiblePublicMonitors(monitors, probeSummaries),
+    [monitors, probeSummaries]
+  )
+  const groups = useMemo(
+    () => publicMonitorGroups(active, page.group ?? {}, t('Probe other monitors')),
+    [active, page.group, t]
+  )
+  const grouped = Object.keys(page.group ?? {}).length > 0
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([])
+  const [pages, setPages] = useState<Record<string, number>>({})
   const [storageLoaded, setStorageLoaded] = useState(false)
   useEffect(() => {
     try {
@@ -59,7 +60,7 @@ export default function MonitorList({
           setExpandedGroups(parsed)
       }
     } catch {
-      /* Private browsing or invalid saved preferences must not break the status page. */
+      /* Preferences are optional. */
     }
     setStorageLoaded(true)
   }, [])
@@ -68,97 +69,39 @@ export default function MonitorList({
     try {
       window.localStorage.setItem('expandedGroups', JSON.stringify(expandedGroups))
     } catch {
-      /* Storage is optional. */
+      /* Preferences are optional. */
     }
   }, [expandedGroups, storageLoaded])
 
-  if (groupedMonitor) {
-    // Grouped monitors
-    content = (
-      <Accordion
-        multiple
-        defaultValue={Object.keys(group)}
-        variant="contained"
-        value={expandedGroups}
-        onChange={(values) => setExpandedGroups(values)}
-      >
-        {Object.keys(group).map((groupName) => {
-          const members = monitors.filter((monitor) => group[groupName].includes(monitor.id))
-          const counts = summarizeDashboardMonitors(
-            members,
-            state,
-            probeSummaries,
-            maintenances,
-            now
-          )
-          return (
-            <Accordion.Item key={groupName} value={groupName}>
-              <Accordion.Control>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    width: '100%',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '4px 12px',
-                  }}
-                >
-                  <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{groupName}</div>
-                  <Text
-                    fw={500}
-                    style={{
-                      display: 'inline',
-                      paddingRight: '5px',
-                      color: categoryColors[dashboardCategory(counts)],
-                    }}
-                  >
-                    {(['healthy', 'closed', 'maintenance', 'abnormal'] as MonitorCategory[])
-                      .map((category) => `${t(categoryLabels[category])} ${counts[category]}`)
-                      .join(' · ')}
-                  </Text>
-                </div>
-              </Accordion.Control>
-              <Accordion.Panel>
-                {monitors
-                  .filter((monitor) => group[groupName].includes(monitor.id))
-                  .sort((a, b) => group[groupName].indexOf(a.id) - group[groupName].indexOf(b.id))
-                  .map((monitor) => (
-                    <div key={monitor.id}>
-                      <Card.Section ml="xs" mr="xs">
-                        <MonitorDetail
-                          monitor={monitor}
-                          state={state}
-                          probeSummaries={probeSummaries}
-                          now={now}
-                          maintenances={maintenances}
-                        />
-                      </Card.Section>
-                    </div>
-                  ))}
-              </Accordion.Panel>
-            </Accordion.Item>
-          )
-        })}
-      </Accordion>
-    )
-  } else {
-    // Ungrouped monitors
-    content = monitors.map((monitor) => (
-      <div key={monitor.id}>
-        <Card.Section ml="xs" mr="xs">
-          <MonitorDetail
-            monitor={monitor}
-            state={state}
-            probeSummaries={probeSummaries}
-            now={now}
-            maintenances={maintenances}
+  if (!active.length) return null
+  const renderPage = (members: MonitorTarget[], key: string) => {
+    const selected = publicMonitorPage(members, pages[key] ?? 1)
+    return (
+      <Stack gap="sm">
+        {selected.items.map((monitor) => (
+          <div key={monitor.id}>
+            <MonitorDetail
+              monitor={monitor}
+              state={state}
+              probeSummaries={probeSummaries}
+              now={now}
+              maintenances={maintenances}
+              nativeHistoryLoaded={nativeHistoryLoaded}
+            />
+          </div>
+        ))}
+        {selected.pages > 1 && (
+          <Pagination
+            total={selected.pages}
+            value={selected.page}
+            size="sm"
+            onChange={(value) => setPages((current) => ({ ...current, [key]: value }))}
+            aria-label={`${key} · ${t('Probe page')}`}
           />
-        </Card.Section>
-      </div>
-    ))
+        )}
+      </Stack>
+    )
   }
-
   return (
     <Center>
       <Card
@@ -168,10 +111,63 @@ export default function MonitorList({
         ml="md"
         mr="md"
         mt="md"
-        withBorder={!groupedMonitor}
-        style={{ width: '100%', maxWidth: groupedMonitor ? 897 : 865, minWidth: 0 }}
+        withBorder={!grouped}
+        style={{ width: '100%', maxWidth: grouped ? 897 : 865, minWidth: 0 }}
       >
-        {content}
+        {grouped ? (
+          <Accordion
+            multiple
+            variant="contained"
+            value={expandedGroups}
+            onChange={setExpandedGroups}
+            transitionDuration={0}
+          >
+            {groups.map((group) => {
+              const counts = summarizeDashboardMonitors(
+                group.monitors,
+                state,
+                probeSummaries,
+                maintenances,
+                now
+              )
+              return (
+                <Accordion.Item key={group.name} value={group.name}>
+                  <Accordion.Control>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '4px 12px',
+                      }}
+                    >
+                      <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{group.name}</div>
+                      <Text
+                        fw={500}
+                        style={{
+                          display: 'inline',
+                          paddingRight: 5,
+                          color: categoryColors[dashboardCategory(counts)],
+                        }}
+                      >
+                        {(['healthy', 'closed', 'maintenance', 'abnormal'] as MonitorCategory[])
+                          .map((category) => `${t(categoryLabels[category])} ${counts[category]}`)
+                          .join(' · ')}
+                      </Text>
+                    </div>
+                  </Accordion.Control>
+                  <Accordion.Panel>
+                    {expandedGroups.includes(group.name) && renderPage(group.monitors, group.name)}
+                  </Accordion.Panel>
+                </Accordion.Item>
+              )
+            })}
+          </Accordion>
+        ) : (
+          renderPage(active, t('Monitor totals'))
+        )}
       </Card>
     </Center>
   )
