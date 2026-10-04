@@ -24,7 +24,8 @@ async function readBoundedBody(response: Response, deadline: number): Promise<st
       try {
         part = await withTimeout(remaining, reader.read())
       } catch (error) {
-        if (Date.now() >= deadline) throw new Error('[body/timeout] HTTP response body timed out')
+        if (Date.now() >= deadline || classifyNativeFailure(error).code === 'timeout')
+          throw new Error('[body/timeout] HTTP response body timed out')
         throw error
       }
       if (part.done) break

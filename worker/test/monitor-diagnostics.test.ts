@@ -153,6 +153,17 @@ describe('native monitor incident diagnostics', () => {
     expect(cancel).toHaveBeenCalledOnce()
   })
 
+  test('recognizes a body timeout even while the wall clock remains before its deadline', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    const reader = { read: vi.fn().mockRejectedValue(new Error('Promise timed out after 50ms')),
+      cancel, releaseLock: vi.fn() }
+    fetchMock.mockResolvedValueOnce({ status: 200, body: { getReader: () => reader } })
+    const result = await doMonitor({ ...monitor, timeout: 50, responseKeyword: 'expected' }, 'SIN', {} as never)
+    expect(result.status).toMatchObject({ up: false, stage: 'body', code: 'timeout' })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
   test('failed proxy transport is classified separately and fallback retains target diagnostics', async () => {
     fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED private-proxy?token=abc'))
     let result = await doMonitor(
