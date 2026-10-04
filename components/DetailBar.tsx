@@ -1,11 +1,21 @@
 import { MonitorState, MonitorTarget } from '@/types/config'
 import { getColor } from '@/util/color'
+import { mergeHistorySegments } from '@/util/history-segments'
 import { Box, Tooltip, Modal } from '@mantine/core'
-import { useResizeObserver } from '@mantine/hooks'
+import { useMediaQuery, useResizeObserver } from '@mantine/hooks'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 const moment = require('moment')
 require('moment-precise-range-plugin')
+
+type NativeHistoryDay = {
+  time: number
+  percent: string
+  monitoredSeconds: number
+  downSeconds: number
+  reasons: string[]
+  color: string
+}
 
 export default function DetailBar({
   monitor,
@@ -16,6 +26,7 @@ export default function DetailBar({
 }) {
   const { t } = useTranslation('common')
   const [barRef, barRect] = useResizeObserver()
+  const isMobile = useMediaQuery('(max-width: 48em)', false, { getInitialValueInEffect: false })
   const [modalOpened, setModalOpened] = useState(false)
   const [modalTitle, setModalTitle] = useState('')
   const [modelContent, setModelContent] = useState(<div />)
@@ -24,7 +35,7 @@ export default function DetailBar({
     return Math.max(0, Math.min(x2, y2) - Math.max(x1, y1))
   }
 
-  const uptimePercentBars = []
+  const days: NativeHistoryDay[] = []
 
   const currentTime = Math.round(Date.now() / 1000)
   const montiorStartTime = state.incident[monitor.id][0].start[0]
@@ -74,54 +85,78 @@ export default function DetailBar({
 
     const dayPercent = (((dayMonitorTime - dayDownTime) / dayMonitorTime) * 100).toPrecision(4)
 
-    uptimePercentBars.push(
+    days.push({
+      time: dayStart,
+      percent: dayPercent,
+      monitoredSeconds: dayMonitorTime,
+      downSeconds: dayDownTime,
+      reasons: incidentReasons,
+      color: getColor(dayPercent, false),
+    })
+  }
+
+  const dayLabel = (day: NativeHistoryDay) =>
+    Number.isNaN(Number(day.percent)) ? (
+      t('No Data')
+    ) : (
+      <>
+        <div>
+          {t('percent at date', {
+            percent: day.percent,
+            date: new Date(day.time * 1000).toLocaleDateString(),
+          })}
+        </div>
+        {day.downSeconds > 0 && (
+          <div>
+            {t('Down for', {
+              duration: moment.preciseDiff(moment(0), moment(day.downSeconds * 1000)),
+            })}
+          </div>
+        )}
+      </>
+    )
+
+  // Native history measures elapsed time, not reported check counts. Reuse only
+  // the segment geometry; retain every original day and its incident details.
+  const segments = isMobile
+    ? mergeHistorySegments(
+        days.map((day) => ({ time: day.time, status: day.color, checks: 0, failures: 0 })),
+        86400
+      )
+    : []
+
+  const uptimePercentBars =
+    !isMobile &&
+    days.map((day) => (
       <Tooltip
         multiline
-        key={i}
+        key={day.time}
         events={{ hover: true, focus: false, touch: true }}
-        label={
-          Number.isNaN(Number(dayPercent)) ? (
-            t('No Data')
-          ) : (
-            <>
-              <div>
-                {t('percent at date', {
-                  percent: dayPercent,
-                  date: new Date(dayStart * 1000).toLocaleDateString(),
-                })}
-              </div>
-              {dayDownTime > 0 && (
-                <div>
-                  {t('Down for', {
-                    duration: moment.preciseDiff(moment(0), moment(dayDownTime * 1000)),
-                  })}
-                </div>
-              )}
-            </>
-          )
-        }
+        label={dayLabel(day)}
       >
         <div
           style={{
             height: '20px',
             width: '7px',
-            background: getColor(dayPercent, false),
+            background: day.color,
             borderRadius: '2px',
             marginLeft: '1px',
             marginRight: '1px',
           }}
           onClick={() => {
-            if (dayDownTime > 0) {
+            if (day.downSeconds > 0) {
               setModalTitle(
                 t('incidents at', {
                   name: monitor.name,
-                  date: new Date(dayStart * 1000).toLocaleDateString(),
+                  date: new Date(day.time * 1000).toLocaleDateString(),
                 })
               )
               setModelContent(
                 <>
-                  {incidentReasons.map((reason, index) => (
-                    <div key={index}>{reason}</div>
+                  {day.reasons.map((reason, index) => (
+                    <div key={index} style={{ overflowWrap: 'anywhere' }}>
+                      {reason}
+                    </div>
                   ))}
                 </>
               )
@@ -130,8 +165,7 @@ export default function DetailBar({
           }}
         />
       </Tooltip>
-    )
-  }
+    ))
 
   return (
     <>
@@ -147,14 +181,100 @@ export default function DetailBar({
         style={{
           display: 'flex',
           flexWrap: 'nowrap',
+          width: '100%',
+          minWidth: 0,
           marginTop: '10px',
           marginBottom: '5px',
+          ...(isMobile && { height: 20, overflow: 'hidden', borderRadius: 2 }),
         }}
-        visibleFrom="540"
+        role="group"
+        aria-label={`${monitor.name} · ${t('Probe ninety day uptime')}`}
         ref={barRef}
       >
-        {uptimePercentBars.slice(Math.floor(Math.max(9 * 90 - barRect.width, 0) / 9), 90)}
+        {isMobile
+          ? segments.map((segment) => {
+              const members = days.slice(segment.firstIndex, segment.lastIndex + 1)
+              const firstDate = new Date(segment.startTime * 1000).toLocaleDateString()
+              const lastDate = new Date(
+                members[members.length - 1].time * 1000
+              ).toLocaleDateString()
+              const dateRange = firstDate === lastDate ? firstDate : `${firstDate} – ${lastDate}`
+              const monitored = members.reduce((total, day) => total + day.monitoredSeconds, 0)
+              const down = members.reduce((total, day) => total + day.downSeconds, 0)
+              const percent = monitored
+                ? (((monitored - down) / monitored) * 100).toPrecision(4)
+                : null
+              const label = `${dateRange} · ${
+                percent === null ? t('No Data') : t('Overall', { percent })
+              }${
+                down > 0
+                  ? ` · ${t('Down for', {
+                      duration: moment.preciseDiff(moment(0), moment(down * 1000)),
+                    })}`
+                  : ''
+              }`
+              return (
+                <Tooltip
+                  key={segment.startTime}
+                  label={label}
+                  multiline
+                  events={{ hover: true, focus: true, touch: true }}
+                >
+                  <button
+                    type="button"
+                    aria-label={label}
+                    aria-haspopup="dialog"
+                    style={{
+                      // All days have the same duration; no fixed gaps or minimum
+                      // widths may distort their proportional share of the timeline.
+                      flex: `${segment.bucketCount} 1 0`,
+                      minWidth: 0,
+                      height: 20,
+                      padding: 0,
+                      border: 0,
+                      margin: 0,
+                      background: segment.status,
+                      cursor: 'pointer',
+                      outlineOffset: -2,
+                    }}
+                    onClick={() => {
+                      setModalTitle(`${monitor.name} · ${dateRange}`)
+                      setModelContent(
+                        <div
+                          style={{ maxHeight: '65vh', overflowY: 'auto', overflowWrap: 'anywhere' }}
+                        >
+                          {members.map((day) => (
+                            <section key={day.time} style={{ marginBottom: 16 }}>
+                              <div style={{ fontWeight: 600 }}>
+                                {Number.isNaN(Number(day.percent)) &&
+                                  `${new Date(day.time * 1000).toLocaleDateString()} · `}
+                                {dayLabel(day)}
+                              </div>
+                              {day.reasons.map((reason, index) => (
+                                <div key={index}>{reason}</div>
+                              ))}
+                            </section>
+                          ))}
+                        </div>
+                      )
+                      setModalOpened(true)
+                    }}
+                  />
+                </Tooltip>
+              )
+            })
+          : uptimePercentBars &&
+            uptimePercentBars.slice(Math.floor(Math.max(9 * 90 - barRect.width, 0) / 9), 90)}
       </Box>
+      {isMobile && (
+        <Box
+          style={{ display: 'flex', justifyContent: 'space-between', minWidth: 0, fontSize: 12 }}
+          aria-hidden="true"
+        >
+          <span>{new Date(days[0].time * 1000).toLocaleDateString()}</span>
+          <span>{new Date(days[days.length - 1].time * 1000).toLocaleDateString()}</span>
+        </Box>
+      )}
     </>
   )
 }

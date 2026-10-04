@@ -155,7 +155,7 @@ export default function MonitorList({
         mr="md"
         mt="xl"
         withBorder={!groupedMonitor}
-        style={{ width: groupedMonitor ? '897px' : '865px' }}
+        style={{ width: '100%', maxWidth: groupedMonitor ? 897 : 865, minWidth: 0 }}
       >
         {content}
       </Card>

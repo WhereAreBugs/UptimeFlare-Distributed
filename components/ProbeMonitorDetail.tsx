@@ -1,4 +1,4 @@
-import { Accordion, Badge, Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core'
+import { Accordion, Badge, Box, Group, Modal, Stack, Table, Text, Tooltip } from '@mantine/core'
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -18,6 +18,8 @@ import {
 } from '@/util/probe-status'
 import ProbeHistoryChart from './ProbeHistoryChart'
 import ProbeDailyHistory from './ProbeDailyHistory'
+import HistoryTimeline from './HistoryTimeline'
+import type { HistorySegment } from '@/util/history-segments'
 import { maintenances as fallbackMaintenances } from '@/uptime.config'
 
 const historyColors = { ...statusColors, degraded: '#eab308' }
@@ -70,54 +72,54 @@ function ProbeHistory({
 }) {
   const { t } = useTranslation('common')
   const buckets = summarizeProbeHistory(probes, now)
+  const [selected, setSelected] = useState<{
+    segment: HistorySegment<MonitorStatus>
+    buckets: ReturnType<typeof summarizeProbeHistory>
+  } | null>(null)
+  const label = (
+    segment: HistorySegment<MonitorStatus>,
+    members = buckets.slice(segment.firstIndex, segment.lastIndex + 1)
+  ) => {
+    const reported = members.map((bucket) => bucket.reported)
+    const minimum = Math.min(...reported)
+    const maximum = Math.max(...reported)
+    const total = members[0].total
+    const range = `${new Date(segment.startTime * 1000).toLocaleString()}${
+      segment.bucketCount > 1 ? ` – ${new Date(segment.endTime * 1000).toLocaleString()}` : ''
+    }`
+    return `${range}: ${t(statusLabels[segment.status])} · ${
+      segment.checks
+        ? t('Probe bucket detail', {
+            checks: segment.checks,
+            failures: segment.failures,
+            latency: segment.avgLatencyMs?.toFixed(1) ?? '—',
+          })
+        : t('Probe no samples')
+    }${
+      total > 1
+        ? ` · ${t('Probe history coverage', {
+            reported: minimum === maximum ? minimum : `${minimum}–${maximum}`,
+            total,
+          })}`
+        : ''
+    }`
+  }
   return (
     <div>
-      <div
-        style={{ display: 'flex', gap: 2, height: 24 }}
-        role="group"
-        aria-label={`${name} · ${t('Probe history')}`}
-      >
-        {buckets.map((bucket) => {
-          const label = `${new Date(bucket.time * 1000).toLocaleString()}: ${t(
-            statusLabels[bucket.status]
-          )} · ${
-            bucket.checks
-              ? t('Probe bucket detail', {
-                  checks: bucket.checks,
-                  failures: bucket.failures,
-                  latency: bucket.avgLatencyMs?.toFixed(1) ?? '—',
-                })
-              : t('Probe no samples')
-          }${
-            probes.length > 1
-              ? ` · ${t('Probe history coverage', {
-                  reported: bucket.reported,
-                  total: bucket.total,
-                })}`
-              : ''
-          }`
-          return (
-            <Tooltip
-              key={bucket.time}
-              label={label}
-              multiline
-              events={{ hover: true, focus: true, touch: true }}
-            >
-              <div
-                tabIndex={0}
-                role="img"
-                aria-label={label}
-                style={{
-                  flex: 1,
-                  minWidth: 1,
-                  borderRadius: 2,
-                  background: historyColors[bucket.status],
-                }}
-              />
-            </Tooltip>
-          )
-        })}
-      </div>
+      <HistoryTimeline
+        buckets={buckets}
+        bucketSeconds={300}
+        ariaLabel={`${name} · ${t('Probe history')}`}
+        height={24}
+        color={(status) => historyColors[status]}
+        label={label}
+        onSelect={(segment) =>
+          setSelected({
+            segment,
+            buckets: buckets.slice(segment.firstIndex, segment.lastIndex + 1),
+          })
+        }
+      />
       <Group justify="space-between" mt={4}>
         <Text size="xs" c="dimmed">
           {t('Probe twelve hours ago')}
@@ -126,6 +128,33 @@ function ProbeHistory({
           {t('Probe now')}
         </Text>
       </Group>
+      <Modal opened={selected !== null} onClose={() => setSelected(null)} title={name}>
+        {selected && (
+          <Stack gap="sm">
+            <Text size="sm">{label(selected.segment, selected.buckets)}</Text>
+            <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+              {selected.buckets.map((bucket) => (
+                <Text key={bucket.time} size="xs" mb="sm">
+                  {new Date(bucket.time * 1000).toLocaleString()}
+                  {' · '}
+                  {bucket.checks
+                    ? t('Probe bucket detail', {
+                        checks: bucket.checks,
+                        failures: bucket.failures,
+                        latency: bucket.avgLatencyMs?.toFixed(1) ?? '—',
+                      })
+                    : t('Probe no samples')}
+                  {bucket.total > 1 &&
+                    ` · ${t('Probe history coverage', {
+                      reported: bucket.reported,
+                      total: bucket.total,
+                    })}`}
+                </Text>
+              ))}
+            </div>
+          </Stack>
+        )}
+      </Modal>
     </div>
   )
 }
