@@ -6,6 +6,8 @@
 
 最新部署为 `5f2743f`，包含 D1 行数优化 `506702e`、验收文档及前端类型兼容修复。两套 GitHub CI 已通过，实际 Worker 开关为 STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0，Cron 为空；仅一个活动版本 `87990f65-ac18-48a4-bf96-57ece4e96435`。累计删除 12 个替代版本，活动 D1/KV/凭据/队列原样保留。完整比较见 [D1 行数验收](d1-row-budget.md)，本次未查询生产 D1 或重迁移。
 
+随后按用户明确要求重新发布 main `2f9d271`，唯一活动版本为 `f7a7e9fd-2b49-48ff-8a96-f67f2cb4e8b4`（100%），旧版本累计删除 13 个。开关、凭据绑定及 200/401 边界复核通过，Cron 仍暂停，无生产 D1 查询。积压配额估算使用私有本地报告，不向公开仓库披露探针运行统计。
+
 ## 范围与配置
 
 - 工作区 `/Users/cat/Documents/ChatGPT/light-prober`，服务端子仓库 `UptimeFlare/`，Go 探针独立仓库。
