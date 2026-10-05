@@ -4,11 +4,9 @@
 
 生产迁移及两台 Go 升级已经完成。剩余端到端验收仍等待 D1 当日额度恢复；下一次自动检查为 2026-10-06 新加坡 08:05（UTC 00:05）。禁止自动升级付费、重复迁移、大导出或循环查询。
 
-上一轮行数优化部署为 `5f2743f`，包含 D1 行数优化 `506702e`、验收文档及前端类型兼容修复。两套 GitHub CI 已通过，实际 Worker 开关为 STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0，Cron 为空；仅一个活动版本 `87990f65-ac18-48a4-bf96-57ece4e96435`。累计删除 12 个替代版本，活动 D1/KV/凭据/队列原样保留。完整比较见 [D1 行数验收](d1-row-budget.md)，本次未查询生产 D1 或重迁移。
+当前运行源码为 `6930e0a`，唯一活动版本 `5a93fc28-b306-4669-b5d3-79a020eb68eb`，100% 流量，STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0，Cron 为空。服务器 `043e46f` 的验收断言和文档修正不改变运行代码。两套服务端 CI 已通过；一项既有 5 秒测试超时在单次失败作业重跑后通过，部署验证中暂停显示元数据的旧断言已修正。
 
-随后按用户明确要求重新发布 main `2f9d271`，唯一活动版本为 `f7a7e9fd-2b49-48ff-8a96-f67f2cb4e8b4`（100%），旧版本累计删除 13 个。开关、凭据绑定及 200/401 边界复核通过，Cron 仍暂停，无生产 D1 查询。积压配额估算使用私有本地报告，不向公开仓库披露探针运行统计。
-
-最新相同失败合并已部署：源码 `d6cd5dd`（实现 `b6b05c5`），唯一活动版本 `da4d9739-b985-43c5-9747-d3d70d425f3e`，100% 流量；累计删除 14 个旧版本。参见 [失败合并验收](packed-failures.md)。新格式无需 schema 迁移或 Go 升级，按探针/目标/UTC 日合并原因及精确时间，旧失败历史混读兼容；不得降级到忽略合并格式的代码。开关和绑定原样保持，Cron 为空，公开 200/鉴权 401 通过，未查询生产 D1。额度恢复后同时核对合并失败的逐次时间、阶段累计、补传去重和 ACK；无需重复发布相同代码、全表重写旧失败或重新迁移。
+D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-budget.md)、[失败合并验收](packed-failures.md)。新格式不需 schema 迁移或全表重写，不得降级到忽略累计文档/合并失败格式的代码。额度恢复后核对合并失败的逐次时间、阶段累计、去重和 ACK。最新本地页面配套不增加云端状态上报/存储；两台 Go 已升级 `7d0e48c`，不再重复升级。已删除本次替代版本，当前平台只保留一个活动版本；旧 CI 归档和 `bin/refactor/` 的被替代构建已清理。
 
 ## 范围与配置
 
@@ -16,7 +14,7 @@
 - GitHub：`WhereAreBugs/UptimeFlare-Distributed` 与 `WhereAreBugs/UptimeFlare-Distributed-prober`；CLI 在根 `bin/tools/gh`。
 - 活动 D1：`uptimeflare-distributed-d1`；公共 KV：`uptimeflare-distributed-public-status`；DO：新 Worker 的 `Coordinator` 和 `RemoteChecker`。保留当前数据与绑定。
 - 私有 `.deployment/cloudflare.json`、admin.json、probes.json、hosts.json、metadata.json、telemetry.json 和 probe-*.env 是当前凭据/配置，保留并禁止输出或提交。
-- SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前版本 `2b5de8d`，真实 queue.db/config.json 与遥测设置均保留。当前跨平台构建在 `bin/refactor/`。
+- SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前运行版本 `7d0e48c`，真实 queue.db/config.json 与遥测设置均保留。当前构建在 `bin/light-prober` 与 `bin/dashboard-*`。旧 `bin/refactor/` 已删除。
 - 用户 logo 尺寸改动已保留，后续不得覆盖。
 
 ## 已完成的生产转换
@@ -28,8 +26,8 @@
 1. 先做一次 `SELECT version FROM storage_versions WHERE id=1`。本次元数据查询成功但真实管理请求仍报告 `d1_read_quota`；因此该查询成功后还需一次真实管理员登录与配置读取，不能仅凭单行查询宣布恢复。任一步明确报当日读取额度耗尽时保持新 Cron 暂停、GitHub `CRON_ENABLED=0`/`UNIFIED_DEPLOY_APPROVED=0`，安静等待下一次；独立 Go 继续落盘。不能把所有 7500 误判为额度错误。
 2. 返回正常时确认 version=2，再核对 `migration_runs` 的 complete 和 lease_until=0。与记录冲突时调查，不重启旧生产者、不重新迁移。
 3. 核对 Git、当前配置和绑定，恢复新统一 Worker 一分钟 Cron，保持 STATE_STORAGE_VERSION=2/MIGRATION_MODE=0/PACKED_PROBE_COUNTERS=1。根 `.deployment/refactor-production/unified-quota-paused.json` 是当前无 Cron 配置，恢复前核对源码与实际绑定。
-4. 使用根私有 `inspect-probes.py` 核对两台真实队列；该脚本短暂停服务只读检查后确保恢复。SSH agent 本次为 `/var/run/com.apple.launchd.jgwILRXOgf/Listeners`，代理为 `scripts/ssh-physical.py %h %p en5`，变化时重新发现 agent，不读取私钥。验证远程配置、真实新样本、服务端 latest、批次 ACK 和积压消减，不能以 active 或空队列代替新上报证据。行数优化使用已有 D1 表逐条目接续累计值，无需重迁移或升级 Go；累计数以文档及 HTTP 摘要为准，不能拿已冻结的旧 probe_totals 行判断丢失。短期启用资源计数采集真实批次读写，结束后关闭。
-5. 根私有 `verify-production.py` 使用 `settings-fingerprints.json` 的不可恢复 SHA256 核验原配置，不依赖已删除备份。实际完成 HTTP/管理 Token 分组边界/越权/撤销、暂停恢复、维护计数、历史、移动端色带与仅三项页内详情。临时 Token/目标测试后清理，不发送虚构通知给真实 Webhook。
+4. 使用根私有 `inspect-probes.py` 核对两台真实队列；该脚本通过当前本机只读接口检查，不再为了读取统计停服务。SSH agent 本次为 `/var/run/com.apple.launchd.jgwILRXOgf/Listeners`，代理为 `scripts/ssh-physical.py %h %p en5`，变化时重新发现 agent，不读取私钥。验证远程配置、真实新样本、服务端 latest、批次 ACK 和积压消减，不能以 active 或空队列代替新上报证据。行数优化使用已有 D1 表逐条目接续累计值，无需重迁移或升级 Go；累计数以文档及 HTTP 摘要为准，不能拿已冻结的旧 probe_totals 行判断丢失。短期启用资源计数采集真实批次读写，结束后关闭。
+5. 使用根私有 `refactor-production/settings-fingerprints.json` 的不可恢复 SHA256 核验原配置，不依赖已删除备份；若既有校验脚本已清理，按当前 API/源码实现窄范围验收，不恢复旧构建。实际完成 HTTP/管理 Token 分组边界/越权/撤销、暂停恢复、维护计数、历史、移动端色带与仅三项页内详情。临时 Token/目标测试后清理，不发送虚构通知给真实 Webhook。
 6. 两台 OpenTelemetry 已开启且无导出错误，写入入口 200，但 9999 查询入口 401。使用用户补充的查询地址与本地私有凭据确认后端新数据；不能以空写入成功代替新指标验收。
 7. 核对 `D1_VERIFIED_DATABASE_ID`、init.sql hash，GitHub `CRON_ENABLED=1`、`UNIFIED_DEPLOY_APPROVED=1`，按普通快进推送并确认 CI/自动部署成功。工作流固定 v2，不能覆盖用户后续 main 提交。生产临时 Worker 资源测量后保持 METRICS_ENABLED=0，Go 遥测保留。
 8. 所有旧资源、旧版本、手动备份已经清理；只需最终复核没有重新出现，保留当前构建、当前凭据和真实队列。Time Travel 自动历史保留 7 天，平台无单个恢复点删除 API。更新生产报告和 TODO，全部验收完成后停止 heartbeat。
