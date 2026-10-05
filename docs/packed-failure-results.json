@@ -1,0 +1,118 @@
+{
+  "fixture": {
+    "samples": 200,
+    "targets": 16,
+    "probes": 1,
+    "spacingSeconds": 300,
+    "data": "fictional"
+  },
+  "baselineCommit": "b1ece02",
+  "baseline": {
+    "all-success": {
+      "sql": 15,
+      "rowsRead": 541,
+      "rowsWritten": 480,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "all-failure": {
+      "sql": 17,
+      "rowsRead": 945,
+      "rowsWritten": 1280,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    }
+  },
+  "packed": {
+    "all-success": {
+      "sql": 15,
+      "rowsRead": 541,
+      "rowsWritten": 480,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "all-failure": {
+      "sql": 17,
+      "rowsRead": 559,
+      "rowsWritten": 512,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    }
+  },
+  "previousMixed": {
+    "historical": {
+      "rowsRead": 180,
+      "rowsWritten": 142
+    },
+    "fresh": {
+      "rowsRead": 448,
+      "rowsWritten": 163
+    },
+    "five-minute-backlog": {
+      "rowsRead": 744,
+      "rowsWritten": 563
+    }
+  },
+  "packedMixed": {
+    "historical": {
+      "sql": 17,
+      "rowsRead": 153,
+      "rowsWritten": 92,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "historical-replay": {
+      "sql": 2,
+      "rowsRead": 2,
+      "rowsWritten": 0,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "fresh": {
+      "sql": 22,
+      "rowsRead": 429,
+      "rowsWritten": 111,
+      "rowsReturned": 21,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "fresh-replay": {
+      "sql": 2,
+      "rowsRead": 2,
+      "rowsWritten": 0,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "five-minute-backlog": {
+      "sql": 15,
+      "rowsRead": 702,
+      "rowsWritten": 467,
+      "rowsReturned": 3,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "five-minute-backlog-replay": {
+      "sql": 2,
+      "rowsRead": 2,
+      "rowsWritten": 0,
+      "rowsReturned": 2,
+      "doRequests": 0,
+      "doDurationMs": 0
+    },
+    "notification": {
+      "sql": 8,
+      "rowsRead": 347,
+      "rowsWritten": 0,
+      "rowsReturned": 65,
+      "doRequests": 0,
+      "doDurationMs": 0
+    }
+  }
+}
