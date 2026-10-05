@@ -60,3 +60,9 @@ D1 自动 Time Travel 没有单个历史恢复点的删除操作；平台自动�
 当前仅一个活动版本 `87990f65-ac18-48a4-bf96-57ece4e96435`，100% 流量，累计删除 12 个替代版本。STATE_STORAGE_VERSION=2、PACKED_PROBE_COUNTERS=1、MIGRATION_MODE=0、METRICS_ENABLED=0；Cron 和 GitHub 门禁继续暂停。原凭据绑定、唯一 D1/KV 和真实队列保留。本次生产检查未执行 D1 查询/导出/迁移，不能宣称真实新结果或 ACK 已验收。
 
 本地相同 200 条结果对比：读取减少 94%–99%，写入减少 3%–26%，不同场景节省幅度不同；原始、失败记录和历史完整保留。详见 [行数报告](d1-row-budget.md)。额度恢复后累计以 `probe-counters:v1:` 文档和 HTTP 摘要为准，已接续旧 totals 行冻结；仍需验证真实首批接续、后续新样本、ACK、队列消减和生产执行元数据。无需再迁移或升级 Go。
+
+## 相同失败合并发布
+
+2026-10-05：源码 `d6cd5dd` 已替换活动 Worker，版本 `da4d9739-b985-43c5-9747-d3d70d425f3e` 接收 100% 流量，删除被替代的 `f7a7e9fd-2b49-48ff-8a96-f67f2cb4e8b4`，累计删除 14 个旧版本，仍仅一个活动版本。STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0/METRICS_ENABLED=0，Cron 为空；D1/KV/DO 及凭据绑定与发布前一致。公开首页、管理壳及缓存状态 200，未鉴权管理员/探针/管理 Token 接口 401。此次没有生产 D1 查询、历史重迁移、全库导出、备份或探针二进制更换。真实合并失败、历史及 ACK 仍在额度恢复后验收。
+
+本地同一虚构全失败 200 样本写入 1280→512，失败额外写入 800→32，详见 [失败合并验收](packed-failures.md)。Worker 完整 207 项回归通过，随后 SQL 参数大小分块的最终 9 项针对性回归通过；Python 13 项、类型检查、lint、Next/Worker 构建、70 项管理 HTTP、522 项无 D1 缓存、500 目标容量及真实 DO 重建/重放通过。Go 协议及代码没有变化。
