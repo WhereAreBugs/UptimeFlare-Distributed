@@ -1,0 +1,170 @@
+{
+  "date": "2026-10-05",
+  "completed": false,
+  "deployment": {
+    "domain": "status.catxxp123.top",
+    "worker": "uptimeflare-distributed",
+    "serverSource": "610e2f7",
+    "storageVersion": 2,
+    "migrationMode": 0,
+    "cronEnabled": false,
+    "metricsEnabled": false,
+    "githubAutoDeployGate": 0
+  },
+  "migration": {
+    "complete": true,
+    "sourceHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "rawBlocks": 1340,
+    "failureEvents": 1820,
+    "semanticComparisonPassed": true
+  },
+  "platformTrace": {
+    "events": 56,
+    "outcomeOk": 56,
+    "cpuMs": {
+      "min": 0,
+      "max": 13
+    },
+    "scopes": {
+      "coordinator": {
+        "events": 6,
+        "sql": {
+          "min": 2,
+          "max": 7
+        },
+        "rowsRead": {
+          "min": 10,
+          "max": 566
+        },
+        "rowsWritten": {
+          "min": 0,
+          "max": 2
+        },
+        "doRequests": {
+          "min": 0,
+          "max": 0
+        },
+        "doDurationMs": {
+          "min": 0,
+          "max": 0
+        }
+      },
+      "root-cron": {
+        "events": 2,
+        "sql": {
+          "min": 9,
+          "max": 9
+        },
+        "rowsRead": {
+          "min": 234,
+          "max": 234
+        },
+        "rowsWritten": {
+          "min": 0,
+          "max": 0
+        },
+        "doRequests": {
+          "min": 2,
+          "max": 2
+        },
+        "doDurationMs": {
+          "min": 1766,
+          "max": 2833
+        }
+      },
+      "root-fetch": {
+        "events": 48,
+        "sql": {
+          "min": 0,
+          "max": 6
+        },
+        "rowsRead": {
+          "min": 0,
+          "max": 757
+        },
+        "rowsWritten": {
+          "min": 0,
+          "max": 2
+        },
+        "doRequests": {
+          "min": 0,
+          "max": 0
+        },
+        "doDurationMs": {
+          "min": 0,
+          "max": 0
+        }
+      }
+    }
+  },
+  "quota": {
+    "confirmedDailyReadLimit": true,
+    "topLegacySqlOnlyBefore": "2026-10-05T00:24:00Z",
+    "legacyPointLookupLocalRegression": {
+      "coldSamples": 5000,
+      "submittedSamples": 30,
+      "beforeRowsRead": 156588,
+      "afterRowsRead": 718
+    }
+  },
+  "probes": [
+    {
+      "version": "2b5de8d",
+      "telemetryEnabled": true,
+      "cachedTargets": 16,
+      "queue": {
+        "bytes": 5155,
+        "count": 48,
+        "last-time": 1791161194,
+        "physicalCount": 48
+      },
+      "ActiveState": "active",
+      "SubState": "running",
+      "MemoryCurrent": "5193728",
+      "NRestarts": "0",
+      "ExecMainStartTimestamp": "Mon 2026-10-05 08:47:03 CST",
+      "probeAlias": "probe-1"
+    },
+    {
+      "version": "2b5de8d",
+      "telemetryEnabled": true,
+      "cachedTargets": 16,
+      "queue": {
+        "bytes": 5251,
+        "count": 48,
+        "last-time": 1791161161,
+        "physicalCount": 48
+      },
+      "ActiveState": "active",
+      "SubState": "running",
+      "MemoryCurrent": "5062656",
+      "NRestarts": "0",
+      "ExecMainStartTimestamp": "Mon 2026-10-05 08:46:32 CST",
+      "probeAlias": "probe-2"
+    }
+  ],
+  "telemetry": {
+    "runtimeEnabled": true,
+    "exportErrors": 0,
+    "emptyOtlpStatus": 200,
+    "metricReadStatus": 401,
+    "actualBackendSamplesVerified": false
+  },
+  "productionMobile": {
+    "width": 390,
+    "scrollWidth": 390,
+    "domNodesWithHomeOpen": 185,
+    "dialogs": 0,
+    "staleWarningShown": true,
+    "historyInteractionVerified": false
+  },
+  "cleanup": {
+    "oldWorkerDisabled": true,
+    "oldWorkerDeleted": false,
+    "oldPagesCurrentMaintenance": true,
+    "oldPagesDeployments": 21,
+    "oldPagesDeleted": false,
+    "projectBackupsDeleted": false
+  },
+  "nextAutomaticCheck": "2026-10-06T00:05:00Z"
+}

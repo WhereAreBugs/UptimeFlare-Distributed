@@ -1,8 +1,8 @@
 # 生产续作记录
 
-用户已经明确授权：本地完整改造后部署；新部署验证后移除本项目所有旧 Worker/资源和备份。2026-10-05 本地操作时 D1 返回代码 7500：当日免费行读取额度耗尽。用户选择“额度恢复后自动继续”，检查时间为新加坡 08:05（UTC 00:05）。禁止为此自动升级付费套餐。
+用户已经明确授权：本地完整改造后部署；新部署验证后移除本项目所有旧 Worker/资源和备份。2026-10-05 已完成完整备份、state-v2 完整语义迁移、域名切换和两台 Go 升级，随后 D1 再次明确报当日免费读取额度耗尽。用户选择“额度恢复后自动继续”，下一次检查为 2026-10-06 新加坡 08:05（UTC 00:05）。禁止自动升级付费，禁止重复已完成的迁移及大导出。生产证据及待验收事项见 [refactor-production.md](refactor-production.md)。
 
-当前已经执行并读取 Cloudflare 配置验证：`uptimeflare-distributed-worker` 的 Cron 列表为空，workers.dev 和 previews_enabled 都是 false。旧 Pages `uptimeflare-distributed` 尚保留；不要把“入口停用”写成旧 Worker 已删除。Cloudflare 触发器配置传播可能有延迟，迁移前还需核实没有活动写入租约。
+当前已经读取 Cloudflare 配置验证：旧 `uptimeflare-distributed-worker` 的 Cron 为空，workers.dev 和 previews_enabled 都是 false。旧 Pages 当前部署所有路径返回 503，但项目及旧不可变部署仍保留。新统一 `uptimeflare-distributed` 已使用 v2 接管域名，其 Cron 暂停，GitHub UNIFIED_DEPLOY_APPROVED=0；源码修复 610e2f7 已发布且保持空 Cron。不要把入口停用写成资源已经删除。
 
 ## 范围与配置
 
@@ -15,7 +15,17 @@
 - SSH 主机为 `root@45.192.249.191`、`root@45.207.35.75`。先读取远端架构、systemd 与缓存状态，按已授权 SSH 方式连接，保持本地持久队列和 OpenTelemetry 设置。禁止删 queue.db 来绕过补传。
 - 原有 Header logo 尺寸改动已保留原样并单独提交；部署前按当前源码生成静态资源，避免误覆盖。
 
-## 续作步骤
+## 当前续作步骤
+
+1. 仅做一次 `SELECT version FROM storage_versions WHERE id=1`。SQL 已与实际 schema 核对；7500 必须同时核对是否明确报当日额度耗尽，不能将语法错误误判为额度。如果仍耗尽，保持新旧 Cron 暂停、自动发布门禁为 0，安静等待下一次；独立 Go 继续采样落盘。
+2. 正常返回时确认 version=2，再核对 `migration_runs` 中 state-v2 的 complete 和 lease_until=0。迁移已经完成，不重新 apply、恢复旧表或执行全库导出。若状态与记录冲突，先调查，不开启旧生产者。
+3. 核对当前 Git/Worker 版本、凭据和绑定。已有 `.deployment/refactor-production/unified-quota-paused.json` 可作当前无 Cron 配置参考，不复用旧的 v1/MIGRATION_MODE=1 配置。恢复新 Worker 的一分钟 Cron，保持 STATE_STORAGE_VERSION=2 和 MIGRATION_MODE=0；旧 Worker 及旧 Pages 当前入口继续关闭。
+4. 先读取两台真实队列数量，保留 queue.db/config.json。原 SSH agent 在本次运行使用 `/var/run/com.apple.launchd.jgwILRXOgf/Listeners`，代理为 `scripts/ssh-physical.py %h %p en5`；如 agent 改变则重新查找，不读取私钥。根 `.deployment/refactor-production/inspect-probes.py` 会短暂停服务并只读验证队列后确保恢复。核验服务端配置获取、Cloudflare/独立探针实际新结果、回执和队列 ACK 消减；不能用 active 或单次空队列代替新上报证据。
+5. 根 `.deployment/refactor-production/verify-production.py` 已修复临时 Token 返回结构及统计 SQL 列歧义。完成其 HTTP/权限/保存配置检查，另外实际验证暂停/恢复、维护计数、生产移动端色带与仅三项页内详情。测试临时目标/Token 应清理，不向真实 Webhook 发送虚构通知。OpenObserve 写入可用、查询入口 401；采用用户补充的正确查询入口和已有本地凭据核验后端新指标。
+6. 核对本项目 D1_VERIFIED_DATABASE_ID、当前 init.sql hash、STATE_STORAGE_VERSION=2，恢复 UNIFIED_DEPLOY_APPROVED=1。按普通快进推送，确认 GitHub 自动部署成功，不能覆盖用户后续 main 提交。短期资源测量完关闭 METRICS_ENABLED，保留 Go 的遥测配置。
+7. 全部生产验收完成后按下文清理步骤删除旧 Worker/专属 DO、旧 Pages 全部部署及项目、被替代的本项目资源与全部项目备份。旧不可变 Pages 地址需要一并消除；活动 D1/KV、凭据和真实队列保留。更新报告/TODO、推送并停止此 heartbeat。
+
+## 首次迁移操作记录（已执行，不再重复）
 
 1. 仅以一次轻量 D1 查询确认额度恢复；没有恢复时保持旧 Cron 停用，不循环执行大查询或导出。
 2. 读取当前资源和域名归属、确认旧生产者停止。保留现有配置、暂停状态、Token 和全部历史。读取当前 KV 可验证公共页面，不能用缓存当数据库迁移成功证据。

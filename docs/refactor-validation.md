@@ -1,6 +1,6 @@
 # 整体改造本地验收
 
-2026-10-05。本文只记录本地实现和验收；生产迁移、上线、两台探针升级与旧资源/备份删除尚待 D1 免费读取额度恢复。生产续作见 [refactor-deployment.md](refactor-deployment.md)。
+2026-10-05。本文记录本地实现和验收；生产迁移、统一部署及两台探针升级已经执行，剩余生产验收受 D1 读取额度耗尽影响，旧资源/备份尚未删除。生产证据见 [refactor-production.md](refactor-production.md)，续作见 [refactor-deployment.md](refactor-deployment.md)。
 
 ## 实现范围
 
@@ -15,9 +15,9 @@
 
 | 检查 | 本地结果 |
 | --- | --- |
-| Worker 回归 | 19 文件、188 项通过，包含实际 workerd/D1 绑定 |
+| Worker 回归 | 19 文件、191 项通过，包含实际 workerd/D1 绑定及迁移写入冻结/兼容 SQL 冷历史回归 |
 | util 回归 | 56 项通过 |
-| Python 迁移/备份恢复/归档 | 6 项通过 |
+| Python 迁移/备份恢复/归档 | 7 项通过，包含无原生旧 state 的纯分布式安装 |
 | TypeScript 与 lint | Worker/页面类型检查通过，无 ESLint 警告或错误 |
 | 构建 | Next 静态页面与统一 Worker 产物生成成功，Wrangler dry-run 成功 |
 | 管理 API | 实际 Worker 产物 70 个 HTTP 断言，另含 D1 与公开隐私检查 |
@@ -57,10 +57,10 @@
 
 真实 Coordinator 接收场景分别记录根 Worker 与 DO：首批根路径 2 条 SQL、读 5、写 0、2 次 DO 调用；Coordinator 17 条 SQL、读 2674、写 74。重放 Coordinator 3 条 SQL、读 6、写 0。每次执行的网络预算仍分别约束根和区域，不表示单次可以无限测量全部配置目标。
 
-本地 workerd 无可用 CPU 计时，因此 JSON 中 `cpuMs` 为 null；DO/执行墙钟只作本地参考，不能当作 Cloudflare CPU 或生产费用证明。生产 CPU、目标数据完整迁移、ACK 积压消减与遥测需要上线后单独验收。Docker 镜像本身未构建验收；验证的是镜像所调用的统一构建和本地启动入口。
+本地 workerd 无可用 CPU 计时，因此 JSON 中 `cpuMs` 为 null；DO/执行墙钟只作本地参考，不能当作 Cloudflare CPU 或生产费用证明。生产 CPU 已另行采集，完整迁移已比对；额度故障后的 ACK 积压消减及后端遥测仍待验收，见生产报告。Docker 镜像本身未构建验收；验证的是镜像所调用的统一构建和本地启动入口。
 
 ## 提交与发布
 
 变更按公开隐私边界、统一入口/区域复用、依赖清理、state-v2/事务、迁移工具、页面加载、部署工具及验收文档分阶段提交。原有 Header logo 尺寸改动保留原样并单独提交，避免后续 CI 重建产物恢复旧尺寸。
 
-GitHub 部署作业默认受 `UNIFIED_DEPLOY_APPROVED` 变量约束。迁移完成并核实 storage_versions=2 后才启用生产部署变量，避免默认 v1 发布覆盖 v2。旧 Worker Cron、workers.dev 和预览入口已经停用；旧 Worker/Pages 尚未删除。
+GitHub 部署作业受 `UNIFIED_DEPLOY_APPROVED` 变量约束。迁移完成并核实 storage_versions=2 后曾启用并完成自动部署；再次耗尽额度后暂设为 0，新 Cron 关闭，恢复时保持 STATE_STORAGE_VERSION=2。旧 Worker Cron、workers.dev 和预览入口已经停用；旧 Worker/Pages 尚未删除。
