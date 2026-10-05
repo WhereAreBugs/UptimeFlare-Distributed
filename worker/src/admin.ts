@@ -591,10 +591,12 @@ export async function handleAdminRequest(
     if (!(await authenticated(request, env))) return json({ error: '请先登录' }, 401)
     if (path === '/api/admin/logout')
       return json({ ok: true }, 200, { 'Set-Cookie': cookie('', 0) })
+    if (env.MIGRATION_MODE === '1' && request.method !== 'GET')
+      return json({ error: 'Storage migration in progress; retry later' }, 503)
     if (path.startsWith('/api/admin/tokens')) return await handleAdminTokens(request, env, fallback)
     if (path !== '/api/admin/config') return json({ error: 'Not found' }, 404)
     if (request.method === 'GET') {
-      await ensureGroupIds(env, fallback)
+      if (env.MIGRATION_MODE !== '1') await ensureGroupIds(env, fallback)
       return json(await getSettings(env, fallback))
     }
     const data = await readJSON(request)

@@ -27,6 +27,7 @@ import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-st
 import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
 
 export interface ProbeEnv {
+  MIGRATION_MODE?: string
   STATE_STORAGE_VERSION?: string
   COORDINATOR_DO?: DurableObjectNamespace<Coordinator>
   UPTIMEFLARE_D1: D1Database

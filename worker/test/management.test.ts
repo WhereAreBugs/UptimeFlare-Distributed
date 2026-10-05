@@ -692,3 +692,13 @@ describe('scoped management tokens with actual D1', () => {
     expect(JSON.stringify(data)).not.toMatch(/private|error|loc/)
   })
 })
+
+it('blocks trusted target controls during migration without changing configuration or rejecting reads', async () => {
+  const token = await create()
+  const paused = { ...env, MIGRATION_MODE: '1' }
+  const before = await env.UPTIMEFLARE_D1.prepare('SELECT revision,value FROM admin_config WHERE id=1').first()
+  expect((await manage(token.token, 'monitors/one/disable', 'POST', {}, paused)).status).toBe(503)
+  expect((await manage(undefined, 'monitors/one/disable', 'POST', {}, paused)).status).toBe(401)
+  expect((await manage(token.token, 'status', 'GET', undefined, paused)).status).toBe(200)
+  expect(await env.UPTIMEFLARE_D1.prepare('SELECT revision,value FROM admin_config WHERE id=1').first()).toEqual(before)
+})

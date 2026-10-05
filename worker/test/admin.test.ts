@@ -68,6 +68,17 @@ afterAll(async () => {
 })
 
 describe('authenticated web configuration with actual D1', () => {
+  it('freezes authenticated configuration and token writes during migration while preserving reads', async () => {
+    const cookie = await login()
+    const paused = { ...env, MIGRATION_MODE: '1' }
+    const before = await env.UPTIMEFLARE_D1.prepare('SELECT revision,value FROM admin_config WHERE id=1').first()
+    for (const [path, method] of [['config', 'PUT'], ['tokens', 'POST'], ['tokens/00000000-0000-4000-8000-000000000001', 'DELETE']]) {
+      expect((await handleAdminRequest(request(path, method, {}, cookie), paused, fallback)).status).toBe(503)
+    }
+    expect((await handleAdminRequest(request('config', 'PUT', {}), paused, fallback)).status).toBe(401)
+    expect((await handleAdminRequest(request('config', 'GET', undefined, cookie), paused, fallback)).status).toBe(200)
+    expect(await env.UPTIMEFLARE_D1.prepare('SELECT revision,value FROM admin_config WHERE id=1').first()).toEqual(before)
+  })
   it('rejects anonymous reads/writes, wrong passwords, cross-origin login and missing secrets', async () => {
     expect((await handleAdminRequest(request('config', 'GET'), env, fallback)).status).toBe(401)
     expect((await handleAdminRequest(request('config', 'PUT', {}), env, fallback)).status).toBe(401)

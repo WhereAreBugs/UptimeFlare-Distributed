@@ -170,7 +170,7 @@ export async function handleAdminTokens(
   fallback: WorkerConfig
 ): Promise<Response> {
   try {
-    await ensureGroupIds(env, fallback)
+    if (env.MIGRATION_MODE !== '1') await ensureGroupIds(env, fallback)
     const settings = await getSettings(env, fallback)
     const path = new URL(request.url).pathname
     if (request.method === 'GET' && path === '/api/admin/tokens') {
@@ -391,6 +391,8 @@ export async function handleManagementRequest(
     if (!token) return json({ error: 'Token 无效、已撤销或已过期' }, 401)
     if (!inventory && !(token.permissions & (control ? 2 : 1)))
       return json({ error: 'Token 无此权限' }, 403)
+    if (control && env.MIGRATION_MODE === '1')
+      return json({ error: 'Storage migration in progress; retry later' }, 503)
     const settings = await getSettings(env, fallback)
     const scopedGroups = authorizedGroups(token, settings)
     const group = groupStatus || (control?.[1] === 'groups' ? control : null)
