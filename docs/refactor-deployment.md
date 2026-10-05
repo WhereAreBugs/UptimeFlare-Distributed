@@ -21,8 +21,8 @@
 
 1. 先做一次 `SELECT version FROM storage_versions WHERE id=1`。本次元数据查询成功但真实管理请求仍报告 `d1_read_quota`；因此该查询成功后还需一次真实管理员登录与配置读取，不能仅凭单行查询宣布恢复。任一步明确报当日读取额度耗尽时保持新 Cron 暂停、GitHub `CRON_ENABLED=0`/`UNIFIED_DEPLOY_APPROVED=0`，安静等待下一次；独立 Go 继续落盘。不能把所有 7500 误判为额度错误。
 2. 返回正常时确认 version=2，再核对 `migration_runs` 的 complete 和 lease_until=0。与记录冲突时调查，不重启旧生产者、不重新迁移。
-3. 核对 Git、当前配置和绑定，恢复新统一 Worker 一分钟 Cron，保持 STATE_STORAGE_VERSION=2/MIGRATION_MODE=0。根 `.deployment/refactor-production/unified-quota-paused.json` 是当前无 Cron 配置，恢复前核对源码与实际绑定。
-4. 使用根私有 `inspect-probes.py` 核对两台真实队列；该脚本短暂停服务只读检查后确保恢复。SSH agent 本次为 `/var/run/com.apple.launchd.jgwILRXOgf/Listeners`，代理为 `scripts/ssh-physical.py %h %p en5`，变化时重新发现 agent，不读取私钥。验证远程配置、真实新样本、服务端 latest、批次 ACK 和积压消减，不能以 active 或空队列代替新上报证据。
+3. 核对 Git、当前配置和绑定，恢复新统一 Worker 一分钟 Cron，保持 STATE_STORAGE_VERSION=2/MIGRATION_MODE=0/PACKED_PROBE_COUNTERS=1。根 `.deployment/refactor-production/unified-quota-paused.json` 是当前无 Cron 配置，恢复前核对源码与实际绑定。
+4. 使用根私有 `inspect-probes.py` 核对两台真实队列；该脚本短暂停服务只读检查后确保恢复。SSH agent 本次为 `/var/run/com.apple.launchd.jgwILRXOgf/Listeners`，代理为 `scripts/ssh-physical.py %h %p en5`，变化时重新发现 agent，不读取私钥。验证远程配置、真实新样本、服务端 latest、批次 ACK 和积压消减，不能以 active 或空队列代替新上报证据。行数优化使用已有 D1 表逐条目接续累计值，无需重迁移或升级 Go；累计数以文档及 HTTP 摘要为准，不能拿已冻结的旧 probe_totals 行判断丢失。短期启用资源计数采集真实批次读写，结束后关闭。
 5. 根私有 `verify-production.py` 使用 `settings-fingerprints.json` 的不可恢复 SHA256 核验原配置，不依赖已删除备份。实际完成 HTTP/管理 Token 分组边界/越权/撤销、暂停恢复、维护计数、历史、移动端色带与仅三项页内详情。临时 Token/目标测试后清理，不发送虚构通知给真实 Webhook。
 6. 两台 OpenTelemetry 已开启且无导出错误，写入入口 200，但 9999 查询入口 401。使用用户补充的查询地址与本地私有凭据确认后端新数据；不能以空写入成功代替新指标验收。
 7. 核对 `D1_VERIFIED_DATABASE_ID`、init.sql hash，GitHub `CRON_ENABLED=1`、`UNIFIED_DEPLOY_APPROVED=1`，按普通快进推送并确认 CI/自动部署成功。工作流固定 v2，不能覆盖用户后续 main 提交。生产临时 Worker 资源测量后保持 METRICS_ENABLED=0，Go 遥测保留。
