@@ -10,6 +10,14 @@ import state_v2 as migration
 NOW=1700000000
 STATE={'lastUpdate':NOW,'overallUp':0,'overallDown':1,'incident':{'web':[{'start':[NOW-300], 'end':NOW-300,'error':['dummy']},{'start':[NOW-120,NOW-60],'end':None,'error':['[tcp/refused] TCP connection was refused','[dns/not_found] DNS name was not found']}]},'latency':{'web':[{'time':NOW-120,'ping':0,'loc':'SIN'},{'time':NOW-60,'ping':12,'loc':'SIN'},{'time':NOW,'ping':6,'loc':'NRT'}]}}
 class MigrationTests(unittest.TestCase):
+ def test_probe_only_installation_without_native_state_preserves_complete_history(self):
+  db=sqlite3.connect(':memory:');db.executescript((Path(__file__).resolve().parents[1]/'init.sql').read_text())
+  db.execute("INSERT INTO probe_samples VALUES('a','web',?,1,7,'','','')",(NOW,));db.commit()
+  self.assertEqual(migration.decode_state(None),{'lastUpdate':0,'incident':{},'latency':{}})
+  self.assertTrue(migration.migrate(db)['migrated'])
+  self.assertEqual(db.execute('SELECT COUNT(*) FROM native_hot').fetchone()[0],0)
+  self.assertEqual(sum(len(json.loads(r[0])) for r in db.execute('SELECT value FROM probe_result_blocks')),1)
+  self.assertTrue(migration.migrate(db)['alreadyMigrated'])
  def database(self):
   db=sqlite3.connect(':memory:');db.executescript((Path(__file__).resolve().parents[1]/'init.sql').read_text())
   db.execute("INSERT INTO uptimeflare VALUES('state',?)",(migration.compact(STATE),))

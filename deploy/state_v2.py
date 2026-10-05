@@ -27,7 +27,7 @@ def stamp(value):
 
 def decode_state(value):
     if value is None:
-        return {'lastUpdate': 0, 'overallUp': 0, 'overallDown': 0, 'incident': {}, 'latency': {}}
+        return {'lastUpdate': 0, 'incident': {}, 'latency': {}}
     if isinstance(value, bytes):
         if value.startswith(b'\x1f\x8b'):
             import io
