@@ -1,3 +1,4 @@
+import { storageFailureReason } from './storage-failure'
 import {
   getMonitorIntervalSeconds,
   MIN_MONITOR_INTERVAL_SECONDS,
@@ -635,6 +636,7 @@ export async function handleAdminRequest(
       error instanceof GroupInputError
     )
       return json({ error: error.message }, 400)
+    console.error(JSON.stringify({ event: 'storage_failure', scope: 'admin', reason: storageFailureReason(error) }))
     return json({ error: '配置服务暂时不可用' }, 503)
   }
 }

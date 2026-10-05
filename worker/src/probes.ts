@@ -1,3 +1,4 @@
+import { storageFailureReason } from './storage-failure'
 import { getCoordinator } from './coordination-client'
 import { withTimeout } from './util'
 import { cleanupStateV2 } from './retention-v2'
@@ -573,7 +574,7 @@ export async function handleProbeRequest(
     return json({ batch_id: batch.batch_id, accepted: batch.results.length })
   } catch (error) {
     if (error instanceof ProbeRequestError) return json({ error: error.message }, error.status)
-    console.error('Probe ingestion storage failure')
+    console.error(JSON.stringify({ event: 'storage_failure', scope: 'probe', reason: storageFailureReason(error) }))
     return json({ error: 'Probe storage is temporarily unavailable; retry the same batch' }, 503)
   }
 }
