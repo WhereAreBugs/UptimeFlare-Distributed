@@ -357,9 +357,17 @@ try {
   )
   const assignments = await json('/api/probes/config', 200, { credential: probeToken })
   assert.ok(
-    !JSON.stringify(assignments).includes('"a1"') && !JSON.stringify(assignments).includes('"a2"'),
-    'Paused targets must leave probe configuration'
+    !assignments.monitors.some((monitor) => ['a1', 'a2'].includes(monitor.id)),
+    'Paused targets must leave executable probe configuration'
   )
+  const pausedDisplay = assignments.display_monitors.filter((monitor) =>
+    ['a1', 'a2'].includes(monitor.id)
+  )
+  assert.equal(pausedDisplay.length, 2, 'Local dashboard retains paused assignments')
+  assert.ok(pausedDisplay.every((monitor) => monitor.paused))
+  assert.ok(pausedDisplay.every((monitor) =>
+    !['target', 'headers', 'body', 'checkProxyHeaders'].some((key) => key in monitor)
+  ), 'Display metadata must not contain target request secrets')
   await call('/api/manage/monitors/a1/enable', 200, {
     credential: control.token,
     method: 'POST',
