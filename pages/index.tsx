@@ -24,7 +24,6 @@ import {
   isPublicSnapshotUnavailable,
   type PublicSnapshotMetadata,
 } from '@/util/public-snapshot'
-import PublicSnapshotNotice from '@/components/PublicSnapshotNotice'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -90,7 +89,6 @@ function Dashboard({
     }
   }, [])
   const aggregate = summarizeDashboardMonitors(monitors, state, summaries, maintenances, now)
-  const snapshot = { snapshotAt, stale: snapshotUnavailable, snapshotIncomplete }
 
   // Specify monitorId in URL hash to view a specific monitor (can be used in iframe)
   if (monitorId) {
@@ -100,7 +98,6 @@ function Dashboard({
     }
     return (
       <div style={{ maxWidth: '810px' }}>
-        <PublicSnapshotNotice {...snapshot} />
         <MonitorDetail
           monitor={monitor}
           state={state}
@@ -131,7 +128,6 @@ function Dashboard({
             aggregate={aggregate}
             now={now}
             page={page}
-            snapshot={snapshot}
           />
           <MonitorList
             monitors={monitors}

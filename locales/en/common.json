@@ -122,8 +122,5 @@
   "Monitor paused history": "Monitoring is paused. Previous results remain available.",
   "Historical result": "Historical result",
   "Pause or resume changes apply after saving the configuration.": "Pause or resume changes apply after saving the configuration.",
-  "Probe history unavailable": "History is temporarily unavailable.",
-  "Public snapshot generated": "Status snapshot generated at {{date}}.",
-  "Public snapshot incomplete": "Monitoring data is incomplete. Current reachability is unknown.",
-  "Public snapshot stale": "Monitoring data is out of date. Current reachability is unknown."
+  "Probe history unavailable": "History is temporarily unavailable."
 }
