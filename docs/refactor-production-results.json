@@ -4,12 +4,14 @@
   "deployment": {
     "domain": "status.catxxp123.top",
     "worker": "uptimeflare-distributed",
-    "serverSource": "610e2f7",
+    "serverSource": "33ed1be",
     "storageVersion": 2,
     "migrationMode": 0,
     "cronEnabled": false,
     "metricsEnabled": false,
-    "githubAutoDeployGate": 0
+    "githubAutoDeployGate": 0,
+    "workerVersionId": "1119f492-6d24-4405-bd18-966e85b40a01",
+    "githubCronEnabled": false
   },
   "migration": {
     "complete": true,
@@ -105,7 +107,10 @@
       "submittedSamples": 30,
       "beforeRowsRead": 156588,
       "afterRowsRead": 718
-    }
+    },
+    "lightweightReadsAloneDoNotConfirmRecovery": true,
+    "productionConfirmedReason": "d1_read_quota",
+    "confirmedAt": "2026-10-05T04:20:00Z"
   },
   "probes": [
     {
@@ -159,12 +164,68 @@
     "historyInteractionVerified": false
   },
   "cleanup": {
-    "oldWorkerDisabled": true,
-    "oldWorkerDeleted": false,
-    "oldPagesCurrentMaintenance": true,
-    "oldPagesDeployments": 21,
-    "oldPagesDeleted": false,
-    "projectBackupsDeleted": false
+    "oldWorkerDeleted": true,
+    "oldDoNamespaceDeleted": true,
+    "oldPagesDeleted": true,
+    "oldPagesDeploymentsDeleted": 21,
+    "remainingProjectWorkers": [
+      "uptimeflare-distributed"
+    ],
+    "remainingProjectDo": [
+      "uptimeflare-distributed_Coordinator",
+      "uptimeflare-distributed_RemoteChecker"
+    ],
+    "activeD1Preserved": true,
+    "activeKvPreserved": true,
+    "domainService": "uptimeflare-distributed",
+    "oldDnsRecords": 0,
+    "zoneRoutesIndependentCheck": "403 permission denied",
+    "oldActionArtifactsDeleted": 13,
+    "oldActionArtifactBytesDeleted": 911208993,
+    "priorArtifactsRemaining": 0,
+    "releaseBackups": 0,
+    "deletedPreviousWorkerVersions": 9,
+    "remainingWorkerVersions": 1,
+    "localRemovedEntries": 187,
+    "localRemovedBytes": 449854657,
+    "remoteBinaryBackupsDeleted": 6,
+    "remoteBinaryBackupBytesDeleted": 91210700,
+    "projectManualBackupsDeleted": true,
+    "platformTimeTravelDeleted": false,
+    "platformTimeTravelRetentionDays": 7,
+    "realProbeQueuesPreserved": true,
+    "credentialsPreserved": true,
+    "activeD1KvPreserved": true
   },
-  "nextAutomaticCheck": "2026-10-06T00:05:00Z"
+  "nextAutomaticCheck": "2026-10-06T00:05:00Z",
+  "postCleanupHttp": {
+    "/": 200,
+    "/admin": 200,
+    "/api/state": 200,
+    "/api/admin/config": 401,
+    "/api/probes/config": 401
+  },
+  "localStartupVerification": {
+    "freshDatabaseVersion": 2,
+    "root": 200,
+    "adminUnauthenticated": 401,
+    "probeUnauthenticated": 401,
+    "existingV1Rejected": true,
+    "explicitV1Rejected": true,
+    "unmarkedHistoricalDataRejected": true
+  },
+  "currentStorageDiagnostic": {
+    "http": {
+      "/api/admin/login": 503
+    },
+    "storageFailures": [
+      {
+        "event": "storage_failure",
+        "scope": "admin",
+        "reason": "d1_read_quota"
+      }
+    ],
+    "privateErrorTextRetained": false
+  },
+  "workerRegressionTests": 193
 }

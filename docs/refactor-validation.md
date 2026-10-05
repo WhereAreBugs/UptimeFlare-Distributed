@@ -1,6 +1,6 @@
 # 整体改造本地验收
 
-2026-10-05。本文记录本地实现和验收；生产迁移、统一部署及两台探针升级已经执行，剩余生产验收受 D1 读取额度耗尽影响，旧资源/备份尚未删除。生产证据见 [refactor-production.md](refactor-production.md)，续作见 [refactor-deployment.md](refactor-deployment.md)。
+2026-10-05。本文记录本地实现和验收；生产迁移、统一部署及两台探针升级已经执行，剩余生产验收受 D1 读取额度耗尽影响，旧资源及可管理的手动备份已删除，详见 [清理报告](refactor-cleanup.md)。生产证据见 [refactor-production.md](refactor-production.md)，续作见 [refactor-deployment.md](refactor-deployment.md)。
 
 ## 实现范围
 
@@ -63,4 +63,6 @@
 
 变更按公开隐私边界、统一入口/区域复用、依赖清理、state-v2/事务、迁移工具、页面加载、部署工具及验收文档分阶段提交。原有 Header logo 尺寸改动保留原样并单独提交，避免后续 CI 重建产物恢复旧尺寸。
 
-GitHub 部署作业受 `UNIFIED_DEPLOY_APPROVED` 变量约束。迁移完成并核实 storage_versions=2 后曾启用并完成自动部署；再次耗尽额度后暂设为 0，新 Cron 关闭，恢复时保持 STATE_STORAGE_VERSION=2。旧 Worker Cron、workers.dev 和预览入口已经停用；旧 Worker/Pages 尚未删除。
+GitHub 部署作业受 `UNIFIED_DEPLOY_APPROVED` 变量约束。迁移完成并核实 storage_versions=2 后曾启用并完成自动部署；再次耗尽额度后暂设为 0，新 Cron 关闭，恢复时保持 STATE_STORAGE_VERSION=2。旧 Worker、专属 DO、旧 Pages 全部部署和旧版本现已删除；生产及本地入口固定使用 v2，已有历史未迁移会拒绝启动。
+
+2026-10-05 切换后补充验证：193 项 Worker 及类型检查、11 项 Python 测试、41 项 util 测试、lint/构建、本地 v2 初始化与 v1 拒绝启动、管理 70 项 HTTP 断言、公开缓存 522 项断言、500 目标容量及真实 DO 测试通过。容量测试首次并发时连接中断，单独复测通过。
