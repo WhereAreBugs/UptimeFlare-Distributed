@@ -1,6 +1,7 @@
 import type { ProbeEnv } from './probes'
 import type { ProbeResult } from '../../types/probes'
 import { prepareProbeCounters, counterKey } from './probe-counters'
+import { preparePackedFailures } from './packed-failures'
 
 type Bucket = { id: string; time: number; checks: number; failures: number; sum: number }
 type Day = Bucket & { latencyChecks: number; latencySum: number }
@@ -19,9 +20,7 @@ export async function prepareProbeAggregates(
   const buckets = new Map<string, Bucket>(),
     totals = new Map<string, Bucket>(),
     stages = new Map<string, Stage>(),
-    bucketStages = new Map<string, Stage>(),
     latest = new Map<string, ProbeResult>(),
-    failures: ProbeResult[] = [],
     details: { id: string; time: number; value: string }[] = []
   for (const result of results) {
     const window = Math.floor(result.time / 300) * 300
@@ -42,11 +41,7 @@ export async function prepareProbeAggregates(
       map.set(identity, delta)
     }
     if (!result.up) {
-      failures.push(result)
-      for (const [map, identity] of [
-        [stages, result.monitor_id + '\0' + result.stage],
-        [bucketStages, key(result.monitor_id, window) + '\0' + result.stage],
-      ] as const) {
+      for (const [map, identity] of [[stages, result.monitor_id + '\0' + result.stage]] as const) {
         const delta = map.get(identity) ?? {
           id: result.monitor_id,
           time: window,
@@ -159,16 +154,7 @@ export async function prepareProbeAggregates(
       `INSERT INTO probe_stage_totals(probe_id,monitor_id,stage,failures) SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.stage'),json_extract(value,'$.failures') FROM json_each(?) WHERE (${guard}) ON CONFLICT(probe_id,monitor_id,stage) DO UPDATE SET failures=probe_stage_totals.failures+excluded.failures`,
       legacyStages
     )
-  if (bucketStages.size)
-    insert(
-      `INSERT INTO probe_bucket_stages(probe_id,monitor_id,time,stage,failures) SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.time'),json_extract(value,'$.stage'),json_extract(value,'$.failures') FROM json_each(?) WHERE (${guard}) ON CONFLICT(probe_id,monitor_id,time,stage) DO UPDATE SET failures=probe_bucket_stages.failures+excluded.failures`,
-      [...bucketStages.values()]
-    )
-  if (failures.length)
-    insert(
-      `INSERT OR IGNORE INTO probe_failure_events(probe_id,monitor_id,time,stage,code,message) SELECT ?,json_extract(value,'$.monitor_id'),json_extract(value,'$.time'),COALESCE(json_extract(value,'$.stage'),''),COALESCE(json_extract(value,'$.code'),''),COALESCE(json_extract(value,'$.message'),'') FROM json_each(?) WHERE (${guard})`,
-      failures
-    )
+  statements.push(...(await preparePackedFailures(env, probeId, results, guard)))
   insert(
     `INSERT INTO probe_latest(probe_id,monitor_id,time,up,latency_ms,stage,code,message) SELECT ?,json_extract(value,'$.monitor_id'),json_extract(value,'$.time'),json_extract(value,'$.up'),json_extract(value,'$.latency_ms'),COALESCE(json_extract(value,'$.stage'),''),COALESCE(json_extract(value,'$.code'),''),COALESCE(json_extract(value,'$.message'),'') FROM json_each(?) WHERE (${guard}) ON CONFLICT(probe_id,monitor_id) DO UPDATE SET time=excluded.time,up=excluded.up,latency_ms=excluded.latency_ms,stage=excluded.stage,code=excluded.code,message=excluded.message WHERE excluded.time>probe_latest.time`,
     [...latest.values()]

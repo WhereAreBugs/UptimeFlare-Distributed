@@ -1,4 +1,5 @@
 import type { ProbeEnv } from './probes'
+import { FAILURE_PREFIX, FAILURE_MARKER, FAILURE_DAY } from './packed-failures'
 export const RAW_RETENTION_SECONDS = 90 * 86400,
   CLEANUP_BLOCKS = 128
 /** Indexed keyset deletion. No pending deliveries or open incidents are expired. */
@@ -16,8 +17,19 @@ export async function cleanupStateV2(env: ProbeEnv, now: number) {
       `DELETE FROM probe_result_blocks WHERE (probe_id,window,chunk) IN(SELECT probe_id,window,chunk FROM probe_result_blocks WHERE window<? ORDER BY window LIMIT ${CLEANUP_BLOCKS})`
     ).bind(cutoff - 300),
     env.UPTIMEFLARE_D1.prepare(
-      `DELETE FROM probe_failure_events WHERE (probe_id,monitor_id,time) IN(SELECT probe_id,monitor_id,time FROM probe_failure_events WHERE time<? ORDER BY time LIMIT 1000)`
-    ).bind(cutoff),
+      `DELETE FROM probe_failure_events WHERE (probe_id,monitor_id,time) IN(
+        SELECT f.probe_id,f.monitor_id,f.time FROM probe_failure_events f WHERE f.time<? AND
+        (f.stage<>? OR (f.time<? AND NOT EXISTS(SELECT 1 FROM probe_buckets b
+          WHERE b.probe_id=f.probe_id AND b.monitor_id=substr(f.monitor_id,?)
+            AND b.time>=CAST(f.time/${FAILURE_DAY} AS INTEGER)*${FAILURE_DAY}
+            AND b.time<(CAST(f.time/${FAILURE_DAY} AS INTEGER)+1)*${FAILURE_DAY})))
+        ORDER BY f.time LIMIT 1000)`
+    ).bind(
+      cutoff,
+      FAILURE_MARKER,
+      Math.floor(cutoff / FAILURE_DAY) * FAILURE_DAY,
+      FAILURE_PREFIX.length + 1
+    ),
     env.UPTIMEFLARE_D1.prepare(
       `DELETE FROM native_latency_blocks WHERE (monitor_id,window) IN(SELECT monitor_id,window FROM native_latency_blocks WHERE window<? ORDER BY window LIMIT ${CLEANUP_BLOCKS})`
     ).bind(cutoff - 300),

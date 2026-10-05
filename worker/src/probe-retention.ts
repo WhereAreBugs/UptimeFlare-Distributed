@@ -1,5 +1,6 @@
 import type { ProbeEnv } from './probes'
 import { cleanupStateV2 } from './retention-v2'
+import { packedFailureStageDeltas } from './packed-failures'
 import { beginCommit, endCommit, releaseCommit } from './commit'
 import { getRuntimeConfig } from './settings'
 import { workerConfig } from '../../uptime.config'
@@ -72,7 +73,10 @@ export async function cleanupPackedProbeResults(env: ProbeEnv, now: number) {
       totals.set(identity, total)
       days.set(identity + '\0' + time, day)
     }
-    for (const row of stageRows.results) {
+    for (const row of [
+      ...stageRows.results,
+      ...(await packedFailureStageDeltas(env, expired.results)),
+    ]) {
       const identity = counterKey(row.probe_id, row.monitor_id) + '\0' + row.stage,
         delta = stages.get(identity) ?? {
           probe_id: row.probe_id,

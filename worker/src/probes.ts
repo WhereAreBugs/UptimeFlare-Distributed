@@ -27,6 +27,12 @@ import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './pr
 import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-status'
 import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
 import { loadProbeCounters } from './probe-counters'
+import {
+  readPackedFailures,
+  readPackedFailureSummaries,
+  failureOrder,
+  type FailureRow,
+} from './packed-failures'
 
 export interface ProbeEnv {
   PACKED_PROBE_COUNTERS?: string
@@ -820,8 +826,16 @@ async function readProbeSummaries(
     if (counter) stages.set(key(pair), { ...counter.stages })
   }
   const failures = new Map<string, ProbeSummary['recentFailures']>()
-  for (const row of failuresData.results as Latest[]) {
+  const packedFailures =
+    usesStateV2(env) && !dashboard
+      ? await readPackedFailureSummaries(env, pairs, now - RETENTION_SECONDS, now + 1)
+      : []
+  const failureRows = [...(failuresData.results as FailureRow[]), ...packedFailures].sort(
+    failureOrder
+  )
+  for (const row of failureRows) {
     const values = failures.get(key(row)) || []
+    if (values.length >= 100) continue
     values.push({
       time: row.time,
       stage: row.stage,
@@ -1037,7 +1051,11 @@ export async function getProbeIncidents(
   if (!data.success) throw new Error('Unable to load incident history')
   const labels = new Map(definitions.map((probe) => [probe.id, probe]))
   const targets = new Map(monitors.map((monitor) => [monitor.id, monitor]))
-  const rows = data.results.slice(0, limit)
+  const packed = usesStateV2(env)
+    ? await readPackedFailures(env, pairs, from, to, cursor, limit + 1)
+    : []
+  const combined = [...data.results, ...packed].sort(failureOrder)
+  const rows = combined.slice(0, limit)
   const last = rows[rows.length - 1]
   return {
     failures: rows.map((row) => {
@@ -1059,7 +1077,7 @@ export async function getProbeIncidents(
       }
     }),
     nextCursor:
-      data.results.length > limit && last
+      combined.length > limit && last
         ? btoa(JSON.stringify([last.time, last.monitor_id, last.probe_id]))
         : null,
     from,

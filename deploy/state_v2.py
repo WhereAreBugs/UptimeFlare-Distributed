@@ -225,6 +225,8 @@ def renew(db,owner):
 def rollback(db):
     if db.execute("SELECT 1 FROM uptimeflare WHERE key GLOB 'probe-counters:v1:*' LIMIT 1").fetchone():
         raise ValueError('Packed counters require a compatible v2 server; legacy rollback is refused')
+    if db.execute("SELECT 1 FROM probe_failure_events WHERE stage='@packed:v1' LIMIT 1").fetchone():
+        raise ValueError('Packed failures require a compatible v2 server; legacy rollback is refused')
     version=db.execute('SELECT version FROM storage_versions WHERE id=1').fetchone()
     if not version or version[0]!=2:raise ValueError('Rollback requires schema2')
     source=db.execute("SELECT value FROM uptimeflare WHERE key='state'").fetchone();anchor=decode_state(source[0] if source else None)

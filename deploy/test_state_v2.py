@@ -54,6 +54,12 @@ class MigrationTests(unittest.TestCase):
   before=list(db.iterdump())
   with self.assertRaisesRegex(ValueError,'Packed counters'):migration.rollback(db)
   self.assertEqual(list(db.iterdump()),before)
+ def test_legacy_rollback_refuses_packed_failures_without_modifying_data(self):
+  db=self.database();migration.migrate(db)
+  db.execute("INSERT INTO probe_failure_events VALUES('a','@failure:v1:web',0,'@packed:v1','1','{}')");db.commit()
+  before=list(db.iterdump())
+  with self.assertRaisesRegex(ValueError,'Packed failures'):migration.rollback(db)
+  self.assertEqual(list(db.iterdump()),before)
  def test_unknown_version_and_destination_drift_stop(self):
   db=self.database();db.execute('INSERT INTO storage_versions VALUES(1,99,0)');db.commit()
   with self.assertRaises(ValueError):migration.migrate(db)
