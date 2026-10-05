@@ -27,6 +27,7 @@ import { handlePublicHistoryRequest } from './history'
 import { publishPublicDashboard } from './public-dashboard'
 
 export interface Env {
+  PACKED_PROBE_COUNTERS?: string
   COORDINATOR_DO?: DurableObjectNamespace<Coordinator>
   STATE_STORAGE_VERSION?: string
   METRICS_ENABLED?: string
@@ -77,7 +78,7 @@ const implementation = {
         { status: 503 }
       )
     if (pathname === '/api/history') return handlePublicHistoryRequest(request, env)
-    const workerConfig = await getRuntimeConfig(env, fallbackConfig)
+    const workerConfig = await getRuntimeConfig(env, fallbackConfig, false)
     return handleProbeRequest(
       request,
       env,

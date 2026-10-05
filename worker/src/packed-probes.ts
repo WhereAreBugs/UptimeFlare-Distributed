@@ -13,9 +13,10 @@ import {
 } from './notifications'
 import { getMonitorStaleAfterSeconds } from '../../util/monitor-settings'
 import { publicFailure } from './privacy'
+import { prepareProbeAggregates } from './probe-aggregates'
 
 export const MAX_BLOCK_BYTES = 32 * 1024,
-  MAX_BLOCK_SAMPLES = 40,
+  MAX_BLOCK_SAMPLES = 200,
   MAX_WINDOW_CHUNKS = 128
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength
 const key = (r: ProbeResult) => r.monitor_id + ':' + r.time
@@ -45,7 +46,7 @@ export async function persistPackedBatch(
   completion: D1PreparedStatement[] = [],
   gate?: { scope: string; key: string }
 ) {
-  const config = await getRuntimeConfig(env, fallbackConfig)
+  const config = await getRuntimeConfig(env, fallbackConfig, false)
   const lease = await beginCommit(env, runId, { probeId, results }, config)
   if (lease.replay) return
   try {
@@ -124,80 +125,8 @@ export async function persistPackedBatch(
           `INSERT INTO probe_result_blocks(probe_id,window,chunk,value) SELECT ?,json_extract(value,'$.window'),json_extract(value,'$.chunk'),json_extract(value,'$.value') FROM json_each(?) WHERE (${guard}) ON CONFLICT(probe_id,window,chunk) DO UPDATE SET value=excluded.value`
         ).bind(probeId, JSON.stringify(packed))
       )
-    const payload = JSON.stringify(
-      normalized.map((r) => ({
-        ...r,
-        stage: r.stage ?? '',
-        code: r.code ?? '',
-        message: r.message ?? '',
-        up: r.up ? 1 : 0,
-      }))
-    )
-    const items = `SELECT json_extract(value,'$.monitor_id') monitor_id,json_extract(value,'$.time') time,json_extract(value,'$.up') up,json_extract(value,'$.latency_ms') latency_ms,json_extract(value,'$.stage') stage,json_extract(value,'$.code') code,json_extract(value,'$.message') message FROM json_each(?)`
-    const aggregate = `WITH fresh AS (${items}), deltas AS (SELECT monitor_id,CAST(time/300 AS INTEGER)*300 time,COUNT(*) checks,SUM(1-up) failures,SUM(latency_ms) latency_sum FROM fresh GROUP BY monitor_id,CAST(time/300 AS INTEGER)*300)`
     if (normalized.length) {
-      statements.push(
-        env.UPTIMEFLARE_D1.prepare(
-          `${aggregate}, days AS (SELECT d.monitor_id,CAST(d.time/86400 AS INTEGER)*86400 time,SUM(d.checks) checks,SUM(d.failures) failures,SUM(CASE WHEN COALESCE(b.failures,0)+d.failures=0 THEN COALESCE(b.checks,0)+d.checks ELSE 0 END-CASE WHEN COALESCE(b.failures,0)=0 THEN COALESCE(b.checks,0) ELSE 0 END) latency_checks,SUM(CASE WHEN COALESCE(b.failures,0)+d.failures=0 THEN COALESCE(b.latency_sum,0)+d.latency_sum ELSE 0 END-CASE WHEN COALESCE(b.failures,0)=0 THEN COALESCE(b.latency_sum,0) ELSE 0 END) latency_sum FROM deltas d LEFT JOIN probe_buckets b ON b.probe_id=? AND b.monitor_id=d.monitor_id AND b.time=d.time GROUP BY d.monitor_id,CAST(d.time/86400 AS INTEGER)*86400) INSERT INTO probe_days(probe_id,monitor_id,time,checks,failures,latency_checks,latency_sum) SELECT ?,monitor_id,time,checks,failures,latency_checks,latency_sum FROM days WHERE (${guard}) ON CONFLICT(probe_id,monitor_id,time) DO UPDATE SET checks=probe_days.checks+excluded.checks,failures=probe_days.failures+excluded.failures,latency_checks=probe_days.latency_checks+excluded.latency_checks,latency_sum=probe_days.latency_sum+excluded.latency_sum`
-        ).bind(payload, probeId, probeId)
-      )
-      statements.push(
-        env.UPTIMEFLARE_D1.prepare(
-          `${aggregate} INSERT INTO probe_buckets(probe_id,monitor_id,time,checks,failures,latency_sum) SELECT ?,monitor_id,time,checks,failures,latency_sum FROM deltas WHERE (${guard}) ON CONFLICT(probe_id,monitor_id,time) DO UPDATE SET checks=probe_buckets.checks+excluded.checks,failures=probe_buckets.failures+excluded.failures,latency_sum=probe_buckets.latency_sum+excluded.latency_sum`
-        ).bind(payload, probeId)
-      )
-      statements.push(
-        env.UPTIMEFLARE_D1.prepare(
-          `WITH fresh AS (${items}) INSERT INTO probe_totals(probe_id,monitor_id,checks,failures,latency_sum) SELECT ?,monitor_id,COUNT(*),SUM(1-up),SUM(latency_ms) FROM fresh WHERE (${guard}) GROUP BY monitor_id ON CONFLICT(probe_id,monitor_id) DO UPDATE SET checks=probe_totals.checks+excluded.checks,failures=probe_totals.failures+excluded.failures,latency_sum=probe_totals.latency_sum+excluded.latency_sum`
-        ).bind(payload, probeId)
-      )
-      for (const [table, windowed] of [
-        ['probe_stage_totals', false],
-        ['probe_bucket_stages', true],
-      ] as const)
-        statements.push(
-          env.UPTIMEFLARE_D1.prepare(
-            `WITH fresh AS (${items}) INSERT INTO ${table}(probe_id,monitor_id,${
-              windowed ? 'time,' : ''
-            }stage,failures) SELECT ?,monitor_id,${
-              windowed ? 'CAST(time/300 AS INTEGER)*300,' : ''
-            }stage,COUNT(*) FROM fresh WHERE up=0 AND (${guard}) GROUP BY monitor_id,${
-              windowed ? 'CAST(time/300 AS INTEGER)*300,' : ''
-            }stage ON CONFLICT(probe_id,monitor_id,${
-              windowed ? 'time,' : ''
-            }stage) DO UPDATE SET failures=${table}.failures+excluded.failures`
-          ).bind(payload, probeId)
-        )
-      statements.push(
-        env.UPTIMEFLARE_D1.prepare(
-          `WITH fresh AS (${items}) INSERT OR IGNORE INTO probe_failure_events(probe_id,monitor_id,time,stage,code,message) SELECT ?,monitor_id,time,stage,code,message FROM fresh WHERE up=0 AND (${guard})`
-        ).bind(payload, probeId)
-      )
-      statements.push(
-        env.UPTIMEFLARE_D1.prepare(
-          `WITH fresh AS (${items}), ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY monitor_id ORDER BY time DESC) rank FROM fresh) INSERT INTO probe_latest(probe_id,monitor_id,time,up,latency_ms,stage,code,message) SELECT ?,monitor_id,time,up,latency_ms,stage,code,message FROM ranked WHERE rank=1 AND (${guard}) ON CONFLICT(probe_id,monitor_id) DO UPDATE SET time=excluded.time,up=excluded.up,latency_ms=excluded.latency_ms,stage=excluded.stage,code=excluded.code,message=excluded.message WHERE excluded.time>probe_latest.time`
-        ).bind(payload, probeId)
-      )
-      const details = normalized.flatMap((r) => {
-        const value = {
-          ...(r.certificate_expires_at !== undefined && {
-            certificateExpiresAt: r.certificate_expires_at,
-          }),
-          ...(r.certificate_days_remaining !== undefined && {
-            certificateDaysRemaining: r.certificate_days_remaining,
-          }),
-          ...(r.icmp_latency_ms !== undefined && { icmpLatencyMs: r.icmp_latency_ms }),
-        }
-        return Object.keys(value).length
-          ? [{ id: r.monitor_id, time: r.time, value: JSON.stringify(value) }]
-          : []
-      })
-      if (details.length)
-        statements.push(
-          env.UPTIMEFLARE_D1.prepare(
-            `INSERT OR IGNORE INTO probe_sample_details(probe_id,monitor_id,time,details) SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.time'),json_extract(value,'$.value') FROM json_each(?) WHERE (${guard})`
-          ).bind(probeId, JSON.stringify(details))
-        )
+      statements.push(...(await prepareProbeAggregates(env, probeId, normalized, guard)))
       statements.push(...(await projectedNotifications(env, config, probeId, normalized, guard)))
     }
     // Completion supplied by trusted Cron code is additionally wrapped in the lease guard by callers.
@@ -223,11 +152,29 @@ async function projectedNotifications(
 ) {
   const config = effectiveNotificationConfig(source).config,
     now = Math.floor(Date.now() / 1000),
-    ids = Array.from(new Set(results.map((r) => r.monitor_id)))
-  const rows = await env.UPTIMEFLARE_D1.prepare(
-    'SELECT probe_id,monitor_id,time,up,stage,code FROM probe_latest WHERE monitor_id IN (SELECT value FROM json_each(?))'
+    templates = new Set(config.notificationTemplates?.map((template) => template.id)),
+    candidates = config.monitors.filter(
+      (monitor) =>
+        !monitor.paused &&
+        templates.has(monitor.notificationTemplateId ?? '') &&
+        results.some(
+          (result) =>
+            result.monitor_id === monitor.id &&
+            result.time >= now - getMonitorStaleAfterSeconds(monitor)
+        )
+    ),
+    ids = candidates.map((monitor) => monitor.id)
+  // Offline history cannot trigger a current notification. Neither unrelated
+  // targets nor targets without a template require a latest/observation read.
+  if (!ids.length) return []
+  const pairs = JSON.stringify(
+    candidates.flatMap((monitor) => (monitor.probes ?? []).map((id) => [id, monitor.id]))
   )
-    .bind(JSON.stringify(ids))
+  const rows = await env.UPTIMEFLARE_D1.prepare(
+    `SELECT probe_id,monitor_id,time,up,stage,code FROM probe_latest WHERE
+      (probe_id,monitor_id) IN (SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM json_each(?))`
+  )
+    .bind(pairs)
     .all<{
       probe_id: string
       monitor_id: string
@@ -263,9 +210,7 @@ async function projectedNotifications(
   const suppressed = suppressedMonitors(config, now),
     inputs: NotificationInput[] = [],
     neutral: string[] = []
-  for (const monitor of config.monitors.filter(
-    (m) => changed.has(m.id) && m.notificationTemplateId && !m.paused
-  )) {
+  for (const monitor of candidates.filter((monitor) => changed.has(monitor.id))) {
     const reporting = (monitor.probes ?? [])
       .map((id) => latest.get(monitor.id + ':' + id))
       .filter(

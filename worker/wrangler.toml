@@ -28,6 +28,7 @@ new_sqlite_classes = ["Coordinator"]
 
 [vars]
 STATE_STORAGE_VERSION = "2"
+PACKED_PROBE_COUNTERS = "1"
 METRICS_ENABLED = "0"
 
 [triggers]

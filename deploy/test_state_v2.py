@@ -48,6 +48,12 @@ class MigrationTests(unittest.TestCase):
   backup=sqlite3.connect(':memory:');db.backup(backup)
   original=list(backup.iterdump());migration.migrate(db);db.execute('DELETE FROM admin_config');db.commit();backup.backup(db)
   self.assertEqual(list(db.iterdump()),original)
+ def test_legacy_rollback_refuses_packed_counters_without_modifying_data(self):
+  db=self.database();migration.migrate(db)
+  db.execute("INSERT INTO uptimeflare VALUES('probe-counters:v1:a',?)",(json.dumps({'version':1,'monitors':{}}),));db.commit()
+  before=list(db.iterdump())
+  with self.assertRaisesRegex(ValueError,'Packed counters'):migration.rollback(db)
+  self.assertEqual(list(db.iterdump()),before)
  def test_unknown_version_and_destination_drift_stop(self):
   db=self.database();db.execute('INSERT INTO storage_versions VALUES(1,99,0)');db.commit()
   with self.assertRaises(ValueError):migration.migrate(db)

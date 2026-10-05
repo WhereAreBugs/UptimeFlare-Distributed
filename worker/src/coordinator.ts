@@ -11,6 +11,7 @@ import { getRuntimeConfig } from './settings'
 import { workerConfig } from '../../uptime.config'
 import { publishPublicDashboard } from './public-dashboard'
 import { runNotifications } from './notifications'
+import { cleanupPackedProbeResults } from './probe-retention'
 
 export const COORDINATOR_PROTOCOL = 1
 export type ProbeCommitRequest = {
@@ -94,5 +95,8 @@ export class Coordinator extends DurableObject<Env> {
     return this.serial(async (env) =>
       runNotifications(env, await getRuntimeConfig(env, workerConfig), now, undefined, false)
     )
+  }
+  async cleanup(now: number) {
+    return this.serial((env) => cleanupPackedProbeResults(env, now))
   }
 }

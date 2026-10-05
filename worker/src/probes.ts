@@ -1,7 +1,7 @@
 import { storageFailureReason } from './storage-failure'
 import { getCoordinator } from './coordination-client'
 import { withTimeout } from './util'
-import { cleanupStateV2 } from './retention-v2'
+import { cleanupPackedProbeResults } from './probe-retention'
 import type { Coordinator } from './coordinator'
 import { usesStateV2 } from './storage-v2'
 import { persistPackedBatch } from './packed-probes'
@@ -26,8 +26,10 @@ import type {
 import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './probe-labels'
 import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-status'
 import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
+import { loadProbeCounters } from './probe-counters'
 
 export interface ProbeEnv {
+  PACKED_PROBE_COUNTERS?: string
   MIGRATION_MODE?: string
   STATE_STORAGE_VERSION?: string
   COORDINATOR_DO?: DurableObjectNamespace<Coordinator>
@@ -574,7 +576,13 @@ export async function handleProbeRequest(
     return json({ batch_id: batch.batch_id, accepted: batch.results.length })
   } catch (error) {
     if (error instanceof ProbeRequestError) return json({ error: error.message }, error.status)
-    console.error(JSON.stringify({ event: 'storage_failure', scope: 'probe', reason: storageFailureReason(error) }))
+    console.error(
+      JSON.stringify({
+        event: 'storage_failure',
+        scope: 'probe',
+        reason: storageFailureReason(error),
+      })
+    )
     return json({ error: 'Probe storage is temporarily unavailable; retry the same batch' }, 503)
   }
 }
@@ -584,7 +592,14 @@ export async function cleanupProbeResults(
   env: ProbeEnv,
   now = Math.floor(Date.now() / 1000)
 ): Promise<void> {
-  if (usesStateV2(env) && !(await cleanupStateV2(env, now))) return
+  if (usesStateV2(env)) {
+    if (env.COORDINATOR_DO) {
+      const coordinator = await getCoordinator(env)
+      await coordinator.cleanup(now)
+      return
+    }
+    return cleanupPackedProbeResults(env, now)
+  }
   const cutoff = now - RETENTION_SECONDS
   const expiredBuckets =
     'SELECT probe_id,monitor_id,time FROM probe_buckets WHERE time<? ORDER BY time,probe_id,monitor_id LIMIT 1000'
@@ -672,7 +687,8 @@ async function readProbeSummaries(
   definitions: ProbeDefinition[] = [],
   now = Math.floor(Date.now() / 1000),
   dashboard = false,
-  range?: { from: number; to: number }
+  range?: { from: number; to: number },
+  notificationOnly = false
 ): Promise<Record<string, ProbeMonitorSummary>> {
   const failuresTable = usesStateV2(env) ? 'probe_failure_events' : 'probe_samples'
   const external = monitors.filter((m) => m.probes?.length && (!dashboard || !m.paused))
@@ -687,8 +703,17 @@ async function readProbeSummaries(
     throw new Error('Probe display configuration exceeds limits')
   }
   // Scope reads to current assignments; removed probe identities cannot inflate page queries.
-  const assignments = JSON.stringify(
-    external.flatMap((m) => m.probes!.map((id) => ({ probe_id: id, monitor_id: m.id })))
+  const pairs = external.flatMap((m) => m.probes!.map((id) => ({ probe_id: id, monitor_id: m.id })))
+  const assignments = JSON.stringify(pairs)
+  const counters =
+    usesStateV2(env) && !notificationOnly
+      ? await loadProbeCounters(
+          env,
+          pairs.map((pair) => pair.probe_id)
+        )
+      : new Map()
+  const legacyAssignments = JSON.stringify(
+    pairs.filter((pair) => !counters.get(pair.probe_id)?.monitors[pair.monitor_id])
   )
   const allowedPairs = `SELECT json_extract(value,'$.probe_id'),json_extract(value,'$.monitor_id') FROM json_each(?)`
   const scope = `(probe_id,monitor_id) IN (${allowedPairs})`
@@ -697,10 +722,19 @@ async function readProbeSummaries(
     env.UPTIMEFLARE_D1.prepare(
       `SELECT ${
         dashboard ? 'l.probe_id,l.monitor_id,l.time,l.up,l.latency_ms,l.stage,l.code' : 'l.*'
-      },d.details FROM probe_latest l LEFT JOIN probe_sample_details d
-        ON d.probe_id=l.probe_id AND d.monitor_id=l.monitor_id AND d.time=l.time WHERE ${latestScope}`
+      }${notificationOnly ? '' : ',d.details'} FROM probe_latest l ${
+        notificationOnly
+          ? ''
+          : 'LEFT JOIN probe_sample_details d ON d.probe_id=l.probe_id AND d.monitor_id=l.monitor_id AND d.time=l.time'
+      } WHERE ${latestScope}`
     ).bind(assignments),
-    env.UPTIMEFLARE_D1.prepare(`SELECT * FROM probe_totals WHERE ${scope}`).bind(assignments),
+    ...(!notificationOnly
+      ? [
+          env.UPTIMEFLARE_D1.prepare(`SELECT * FROM probe_totals WHERE ${scope}`).bind(
+            legacyAssignments
+          ),
+        ]
+      : []),
   ]
   if (!dashboard)
     statements.push(
@@ -713,7 +747,7 @@ async function readProbeSummaries(
       ),
       env.UPTIMEFLARE_D1.prepare(
         `SELECT * FROM probe_stage_totals WHERE ${scope} AND failures>0`
-      ).bind(assignments),
+      ).bind(legacyAssignments),
       // Index-assisted correlated LIMIT avoids ranking every retained failed sample.
       env.UPTIMEFLARE_D1.prepare(
         `SELECT s.* FROM probe_latest l JOIN ${failuresTable} s ON
@@ -729,7 +763,7 @@ async function readProbeSummaries(
   const empty = { success: true, results: [] }
   const [
     latestData,
-    totalsData,
+    totalsData = empty,
     historyData = empty,
     stagesData = empty,
     failuresData = empty,
@@ -746,6 +780,10 @@ async function readProbeSummaries(
     `${row.monitor_id}\0${row.probe_id}`
   const latestMap = new Map((latestData.results as Latest[]).map((row) => [key(row), row]))
   const totalsMap = new Map((totalsData.results as Bucket[]).map((row) => [key(row), row]))
+  for (const pair of pairs) {
+    const counter = counters.get(pair.probe_id)?.monitors[pair.monitor_id]
+    if (counter) totalsMap.set(key(pair), { ...pair, ...counter, time: 0 })
+  }
   const histories = new Map<string, ProbeSummary['history']>()
   for (const row of historyData.results as Bucket[]) {
     const values = histories.get(key(row)) || []
@@ -776,6 +814,10 @@ async function readProbeSummaries(
     const values = stages.get(key(row)) || {}
     values[row.stage] = row.failures
     stages.set(key(row), values)
+  }
+  for (const pair of pairs) {
+    const counter = counters.get(pair.probe_id)?.monitors[pair.monitor_id]
+    if (counter) stages.set(key(pair), { ...counter.stages })
   }
   const failures = new Map<string, ProbeSummary['recentFailures']>()
   for (const row of failuresData.results as Latest[]) {
@@ -897,6 +939,16 @@ export function getProbeDashboardSummaries(
   now = Math.floor(Date.now() / 1000)
 ): Promise<Record<string, ProbeMonitorSummary>> {
   return readProbeSummaries(env, monitors, definitions, now, true)
+}
+
+/** Alert evaluation needs reachability only, never accumulated statistics or sparse details. */
+export function getProbeNotificationSummaries(
+  env: ProbeEnv,
+  monitors: MonitorTarget[],
+  definitions: ProbeDefinition[] = [],
+  now = Math.floor(Date.now() / 1000)
+): Promise<Record<string, ProbeMonitorSummary>> {
+  return readProbeSummaries(env, monitors, definitions, now, true, undefined, true)
 }
 
 export type ProbeIncidentQuery = {

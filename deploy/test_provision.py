@@ -59,6 +59,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(len(initialization), 1)
         self.assertIn('INSERT INTO storage_versions(id,version,migrated_at) VALUES(1,2,unixepoch())', initialization[0])
         self.assertEqual(config['vars']['STATE_STORAGE_VERSION'], '2')
+        self.assertEqual(config['vars']['PACKED_PROBE_COUNTERS'], '1')
         self.assertFalse(any('/pages/' in path for _, path, _ in calls))
 
     def test_existing_legacy_or_unmarked_database_is_not_relabelled(self):

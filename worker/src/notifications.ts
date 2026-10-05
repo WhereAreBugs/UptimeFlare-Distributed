@@ -2,7 +2,7 @@ import { getPublicNativeState } from './store'
 import { getMonitorStaleAfterSeconds } from '../../util/monitor-settings'
 import type { MonitorTarget, SingleWebhook, WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
-import { getProbeDashboardSummaries } from './probes'
+import { getProbeNotificationSummaries } from './probes'
 import { CompactedMonitorStateWrapper, getFromStore } from './store'
 import pLimit from 'p-limit'
 import {
@@ -218,19 +218,13 @@ export async function prepareNotifications(
   const fence = `(${guard}) AND ${NOT_PAUSED_IN_SAVED_CONFIG('p.id')}`
   return [
     env.UPTIMEFLARE_D1.prepare(
-      `WITH plans AS (${items}) INSERT OR IGNORE INTO notification_observations(monitor_id,template_id,status,down_since,sample_time,observed_at,reason,notified,version) SELECT p.id,'','up',NULL,0,0,'',0,0 FROM plans p WHERE ${fence}`
+      `WITH plans AS (${items}) INSERT OR IGNORE INTO notification_outbox(event_id,monitor_id,template_id,sequence,value,created_at,next_attempt_at) SELECT p.event_id,p.id,p.template,COALESCE(n.version,0)+1,p.event,p.observed_at,p.observed_at FROM plans p LEFT JOIN notification_observations o ON o.monitor_id=p.id LEFT JOIN notification_state n ON n.monitor_id=p.id WHERE p.notify=1 AND COALESCE(o.version,0)=p.version AND ${fence}`
     ).bind(payload),
     env.UPTIMEFLARE_D1.prepare(
-      `WITH plans AS (${items}) INSERT OR IGNORE INTO notification_state(monitor_id,template_id,status,down_since,observed_at,version) SELECT p.id,'','up',NULL,0,0 FROM plans p WHERE ${fence}`
+      `WITH plans AS (${items}) INSERT INTO notification_state(monitor_id,template_id,status,down_since,observed_at,version) SELECT p.id,p.template,p.status,p.down_since,p.observed_at,COALESCE(n.version,0)+1 FROM plans p LEFT JOIN notification_observations o ON o.monitor_id=p.id LEFT JOIN notification_state n ON n.monitor_id=p.id WHERE COALESCE(o.version,0)=p.version AND ${fence} AND (p.notify=1 OR n.monitor_id IS NULL OR n.template_id<>p.template OR n.status<>p.status OR n.down_since IS NOT p.down_since) ON CONFLICT(monitor_id) DO UPDATE SET template_id=excluded.template_id,status=excluded.status,down_since=excluded.down_since,observed_at=excluded.observed_at,version=excluded.version`
     ).bind(payload),
     env.UPTIMEFLARE_D1.prepare(
-      `WITH plans AS (${items}) INSERT OR IGNORE INTO notification_outbox(event_id,monitor_id,template_id,sequence,value,created_at,next_attempt_at) SELECT p.event_id,p.id,p.template,n.version+1,p.event,p.observed_at,p.observed_at FROM plans p JOIN notification_observations o ON o.monitor_id=p.id JOIN notification_state n ON n.monitor_id=p.id WHERE p.notify=1 AND o.version=p.version AND ${fence}`
-    ).bind(payload),
-    env.UPTIMEFLARE_D1.prepare(
-      `WITH plans AS (${items}) UPDATE notification_state AS n SET template_id=p.template,status=p.status,down_since=p.down_since,observed_at=p.observed_at,version=n.version+1 FROM plans p WHERE n.monitor_id=p.id AND EXISTS(SELECT 1 FROM notification_observations o WHERE o.monitor_id=p.id AND o.version=p.version) AND ${fence}`
-    ).bind(payload),
-    env.UPTIMEFLARE_D1.prepare(
-      `WITH plans AS (${items}) UPDATE notification_observations AS o SET template_id=p.template,status=p.status,down_since=p.down_since,sample_time=p.sample_time,observed_at=p.observed_at,reason=p.reason,notified=p.notified,version=o.version+1 FROM plans p WHERE o.monitor_id=p.id AND o.version=p.version AND ${fence}`
+      `WITH plans AS (${items}) INSERT INTO notification_observations(monitor_id,template_id,status,down_since,sample_time,observed_at,reason,notified,version) SELECT p.id,p.template,p.status,p.down_since,p.sample_time,p.observed_at,p.reason,p.notified,p.version+1 FROM plans p LEFT JOIN notification_observations o ON o.monitor_id=p.id WHERE COALESCE(o.version,0)=p.version AND ${fence} ON CONFLICT(monitor_id) DO UPDATE SET template_id=excluded.template_id,status=excluded.status,down_since=excluded.down_since,sample_time=excluded.sample_time,observed_at=excluded.observed_at,reason=excluded.reason,notified=excluded.notified,version=excluded.version WHERE notification_observations.version=excluded.version-1`
     ).bind(payload),
   ]
 }
@@ -258,7 +252,7 @@ export function resetNeutralNotifications(
   return ids.length
     ? [
         env.UPTIMEFLARE_D1.prepare(
-          `UPDATE notification_observations SET status='up',down_since=NULL,observed_at=?,version=version+1 WHERE monitor_id IN (SELECT value FROM json_each(?)) AND notified=0 AND observed_at<=? AND status NOT IN ('paused','awaiting') AND (${guard})`
+          `UPDATE notification_observations SET status='up',down_since=NULL,observed_at=?,version=version+1 WHERE monitor_id IN (SELECT value FROM json_each(?)) AND notified=0 AND observed_at<=? AND status NOT IN ('paused','awaiting') AND (status<>'up' OR down_since IS NOT NULL) AND (${guard})`
         ).bind(now, JSON.stringify(ids), now),
       ]
     : []
@@ -583,7 +577,7 @@ export async function runNotifications(
   if (cleanup.some((result) => !result.success)) throw new Error('Notification cleanup failed')
   if (!monitors.length) return
   const suppressed = suppressedMonitors(config, now)
-  const summaries = await getProbeDashboardSummaries(env, monitors, config.probes, now)
+  const summaries = await getProbeNotificationSummaries(env, monitors, config.probes, now)
   const native = monitors.some((monitor) => !monitor.probes?.length)
     ? new CompactedMonitorStateWrapper(await getPublicNativeState(env, monitors))
     : null

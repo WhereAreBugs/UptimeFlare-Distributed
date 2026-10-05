@@ -73,6 +73,7 @@ const options = {
   durableObjectsPersist: join(persistence, 'do'),
   bindings: {
     STATE_STORAGE_VERSION: '2',
+    PACKED_PROBE_COUNTERS: '1',
     METRICS_ENABLED: '1',
     PROBE_TOKENS: JSON.stringify({ a: 'fixture-secret-token-1234567890' }),
   },
@@ -148,7 +149,7 @@ try {
   const status = await request('/_fixture/status?id=probe:a:' + batch.batch_id)
   assert.equal(status.body.result.committed, true)
   const packed = await db.prepare('SELECT COUNT(*) count FROM probe_result_blocks').first()
-  assert.ok(packed.count >= 5 && packed.count <= 6)
+  assert.ok(packed.count >= 1 && packed.count <= 2)
   const legacy = await db.prepare('SELECT COUNT(*) count FROM probe_samples').first()
   assert.equal(legacy.count, 0)
   await request('/_fixture/materialize?time=' + now)
@@ -182,8 +183,8 @@ try {
   assert.equal(
     (
       await restored
-        .prepare('SELECT checks FROM probe_totals WHERE monitor_id=?')
-        .bind('t0')
+        .prepare("SELECT json_extract(value,'$.monitors.t0.checks') checks FROM uptimeflare WHERE key=?")
+        .bind('probe-counters:v1:a')
         .first()
     ).checks,
     20
