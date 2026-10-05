@@ -35,3 +35,5 @@
 Cloudflare D1 Time Travel 自动开启，免费计划保留 7 天，没有单个恢复点删除 API。已删除所有可管理的本项目手动备份；平台自动历史须按平台保留窗口过期，未声称物理清除。参见 [Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)、[D1 限制](https://developers.cloudflare.com/d1/platform/limits/)。Worker 旧版本则已通过 [版本删除 API](https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/subresources/versions/methods/delete/) 实际删除。
 
 新存储错误分类日志的生产实测确认管理请求仍为 `d1_read_quota`；轻量元数据查询曾成功，但不能据此视为额度恢复。D1 当日额度故障尚需恢复后的生产验收。独立探针持续采样落盘；不删除队列，不重新创建旧资源，不重复完整迁移或导出。续作步骤见 [部署记录](refactor-deployment.md)。
+
+2026-10-05 后续部署检查：最新代码 `5f2743f`，唯一活动版本 `87990f65-ac18-48a4-bf96-57ece4e96435`，100% 流量；期间三次新版本均清理掉被替代项，累计已删除 12 个旧版本。PACKED_PROBE_COUNTERS=1、v2/MIGRATION_MODE=0、空 Cron；当前凭据/数据保留，公开 200/未鉴权 401 复核通过。没有新增手动备份、旧 Worker、Pages 或 D1/KV。

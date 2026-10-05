@@ -4,6 +4,8 @@
 
 生产迁移及两台 Go 升级已经完成。剩余端到端验收仍等待 D1 当日额度恢复；下一次自动检查为 2026-10-06 新加坡 08:05（UTC 00:05）。禁止自动升级付费、重复迁移、大导出或循环查询。
 
+最新部署为 `5f2743f`，包含 D1 行数优化 `506702e`、验收文档及前端类型兼容修复。两套 GitHub CI 已通过，实际 Worker 开关为 STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0，Cron 为空；仅一个活动版本 `87990f65-ac18-48a4-bf96-57ece4e96435`。累计删除 12 个替代版本，活动 D1/KV/凭据/队列原样保留。完整比较见 [D1 行数验收](d1-row-budget.md)，本次未查询生产 D1 或重迁移。
+
 ## 范围与配置
 
 - 工作区 `/Users/cat/Documents/ChatGPT/light-prober`，服务端子仓库 `UptimeFlare/`，Go 探针独立仓库。
