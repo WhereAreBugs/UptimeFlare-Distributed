@@ -6,7 +6,7 @@
 
 当前运行源码为 `6930e0a`，唯一活动版本 `5a93fc28-b306-4669-b5d3-79a020eb68eb`，100% 流量，STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0，Cron 为空。服务器 `043e46f` 的验收断言和文档修正不改变运行代码。两套服务端 CI 已通过；一项既有 5 秒测试超时在单次失败作业重跑后通过，部署验证中暂停显示元数据的旧断言已修正。
 
-D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-budget.md)、[失败合并验收](packed-failures.md)。新格式不需 schema 迁移或全表重写，不得降级到忽略累计文档/合并失败格式的代码。额度恢复后核对合并失败的逐次时间、阶段累计、去重和 ACK。最新本地页面配套不增加云端状态上报/存储；两台 Go 已升级 `7d0e48c`，不再重复升级。已删除本次替代版本，当前平台只保留一个活动版本；旧 CI 归档和 `bin/refactor/` 的被替代构建已清理。
+D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-budget.md)、[失败合并验收](packed-failures.md)。新格式不需 schema 迁移或全表重写，不得降级到忽略累计文档/合并失败格式的代码。额度恢复后核对合并失败的逐次时间、阶段累计、去重和 ACK。最新本地页面配套不增加云端状态上报/存储；两台 Go 已升级 `0f21ef2`，不再重复升级。已删除本次替代版本，当前平台只保留一个活动版本；旧 CI 归档和 `bin/refactor/` 的被替代构建已清理。
 
 ## 范围与配置
 
@@ -14,7 +14,7 @@ D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-
 - GitHub：`WhereAreBugs/UptimeFlare-Distributed` 与 `WhereAreBugs/UptimeFlare-Distributed-prober`；CLI 在根 `bin/tools/gh`。
 - 活动 D1：`uptimeflare-distributed-d1`；公共 KV：`uptimeflare-distributed-public-status`；DO：新 Worker 的 `Coordinator` 和 `RemoteChecker`。保留当前数据与绑定。
 - 私有 `.deployment/cloudflare.json`、admin.json、probes.json、hosts.json、metadata.json、telemetry.json 和 probe-*.env 是当前凭据/配置，保留并禁止输出或提交。
-- SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前运行版本 `7d0e48c`，真实 queue.db/config.json 与遥测设置均保留。当前构建在 `bin/light-prober` 与 `bin/dashboard-*`。旧 `bin/refactor/` 已删除。
+- SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前运行版本 `0f21ef2`，真实 queue.db/config.json 与遥测设置均保留。当前构建在 `bin/light-prober` 与 `bin/dashboard-*`。旧 `bin/refactor/` 已删除。
 - 用户 logo 尺寸改动已保留，后续不得覆盖。
 
 ## 已完成的生产转换
@@ -35,4 +35,6 @@ D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-
 凭据只从当前本地私有配置读取，输出仅保留名称、计数、版本、hash 或错误码。独立 zone Workers Routes 列表曾返回 403；旧 Worker/DO/Pages 已通过资源列表验证删除，新域名绑定及 DNS 已确认。若以后确需该独立清单，记录实际权限限制。
 
 
-最新本地页面发布：运行源码 6930e0a，Worker 活动版本 `5a93fc28-b306-4669-b5d3-79a020eb68eb`，100%；两台 Go 探针 7d0e48c，已实际验证回环页面、队列哈希保留、1 GiB 总预算和 ACK 后本地历史。后续 main 的验收断言/文档修改不需重复发布相同运行代码。用户已取消云端详情页及积压状态上报，不新增 DO/KV/D1 存储。两台均已成功同步注册名称与目标显示信息；云端补传仍重试，尚未取得升级后的新 ACK，继续沿用原真实新样本/ACK 验收，不依赖或恢复旧二进制。原空 Cron、迁移开关及 GitHub 门禁保持到原定恢复验收。
+本地页面首次发布：运行源码 6930e0a，Worker 活动版本 `5a93fc28-b306-4669-b5d3-79a020eb68eb`，100%；两台 Go 探针 7d0e48c，已实际验证回环页面、队列哈希保留、1 GiB 总预算和 ACK 后本地历史。后续 main 的验收断言/文档修改不需重复发布相同运行代码。用户已取消云端详情页及积压状态上报，不新增 DO/KV/D1 存储。两台均已成功同步注册名称与目标显示信息；云端补传仍重试，尚未取得升级后的新 ACK，继续沿用原真实新样本/ACK 验收，不依赖或恢复旧二进制。原空 Cron、迁移开关及 GitHub 门禁保持到原定恢复验收。
+
+2026-10-06，本地历史扩展已在两台探针部署 `0f21ef2`：开启目标优先排序、12 小时／90 天色带和延迟／可用率折线已验证，升级回填及原队列摘要完全保留；保持 1 GiB 总预算及回环监听。本次不更换云端运行代码，不新增云端状态存储，不重复升级已运行的新探针。保留原云端新样本、ACK、遥测及门禁的剩余验收。
