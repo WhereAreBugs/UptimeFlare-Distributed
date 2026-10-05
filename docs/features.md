@@ -15,17 +15,17 @@
 | 7   | Improve docs by providing simple examples                          | 本页覆盖管理配置、目标、地区代理、通知与开发；[安装说明](external-probes.md) 覆盖共享 D1 与上线探针。                                         | 所有凭据示例均为占位符。                                                                                                                                                                       |
 | 8   | Notification grace period                                          | 管理页提供全局分钟数和目标秒数覆盖；[`notifications.ts`](../worker/src/notifications.ts) 通过分钟观察、D1 状态和 outbox 延迟故障通知。        | 旧源码 `notification.webhook` 也转换为内部模板进入同一持久观察路径；支持跨检测周期宽限、已通知故障后的恢复门控、维护抑制与原因变化策略。                                                       |
 | 9   | SSL certificate checks                                             | `SSL_CERT` → Go TLS 握手/系统信任链/主机名验证 → 到期时间与剩余天数 → D1 → 独立探针详情。                                                     | 默认到期阈值 14 天，可设 0–365 天。Cloudflare 需 HTTP 检测代理；Workers `fetch` 无法提供此检查所需的对端证书。已验证真实 Worker 运行时、Go 检测与 D1 元数据/日桶链路；第三方代理仍需部署验证。 |
-| 10  | ~~Self-host Dockerfile~~                                           | 分支保留 [`Dockerfile`](../Dockerfile) 与 [`entrypoint.sh`](../entrypoint.sh)，运行 Worker、Pages 和本地调度。                                | 原文撤销的是历史 Docker 条目；本分支提供本地方案。Worker/Pages 必须共享 D1、变量与持久目录，并通过本地运行验收。                                                                               |
-| 11  | Incident history                                                   | `/incidents` 与 [`/api/incidents`](../pages/api/incidents.ts) 按月份与目标过滤，分页加载原生故障段和独立探针失败样本。                        | 最多约 90 天；原生持续故障段和探针单次失败分别展示，不混算持续时间。                                                                                                                           |
+| 10  | ~~Self-host Dockerfile~~                                           | 分支保留 [`Dockerfile`](../Dockerfile) 与 [`entrypoint.sh`](../entrypoint.sh)，运行统一 Worker 和本地调度。                                | 原文撤销的是历史 Docker 条目；本分支提供本地方案。统一 Worker 使用 D1、变量与持久目录，并通过本地运行验收。                                                                               |
+| 11  | Incident history                                                   | `/incidents` 与 [`/api/incidents`](../worker/src/index.ts) 按月份与目标过滤，分页加载原生故障段和独立探针失败样本。                        | 最多约 90 天；原生持续故障段和探针单次失败分别展示，不混算持续时间。                                                                                                                           |
 | 12  | Improve `checkLocationWorkerRoute` and fix possible `proxy failed` | 原地区路由现由 [`doMonitor`](../worker/src/monitor.ts) 的 Durable Object RPC、Globalping 与 HTTP 代理分支实现；可配置回退。                   | 代理失败显示 `proxy` 阶段；回退仅适用于本地支持的检查，代理端应有独立鉴权。                                                                                                                    |
 | 13  | Groups                                                             | 管理页“分组” → D1 `page.group` → [`MonitorList`](../components/MonitorList.tsx) 的折叠分组与汇总。                                            | 名称选择目标，支持排序；每个目标保存到一个分组，未分组目标自动补充显示，展开偏好本地保存。                                                                                                     |
 | 14  | Remove old incidents                                               | 原生路径删除已结束的过期故障；[`cleanupProbeResults`](../worker/src/probes.ts) 有界清理过期样本、五分钟桶、日桶与统计。                       | 默认约 90 天；大批数据的清理可能需要多轮，持续故障保留其开始时间。                                                                                                                             |
 | 15  | ~~Known issue~~: non-standard `fetch` port                         | HTTP/HTTPS URL 与 TCP 端口检查接受有效的显式端口，非标准端口已进入本地 HTTP/TCP 回归链路。                                                    | 保留上游“平台问题已解决”语义；Cloudflare 自身的出站网络限制仍适用。                                                                                                                            |
-| 16  | Compatibility date update                                          | Worker/Pages 源配置、部署生成配置与 Terraform 使用显式 `compatibility_date` 和 `nodejs_compat`。                                              | 当前日期以对应配置文件为准，升级运行时后仍需回归 sockets、hex 编码与构建。                                                                                                                     |
+| 16  | Compatibility date update                                          | 统一 Worker 源配置与部署生成配置 使用显式 `compatibility_date` 和 `nodejs_compat`。                                              | 当前日期以对应配置文件为准，升级运行时后仍需回归 sockets、hex 编码与构建。                                                                                                                     |
 | 17  | Scheduled Maintenance                                              | 管理页“维护计划” → D1 → 当前维护提示、目标维护图标、事件显示与通知抑制。                                                                      | 可针对选定目标或所有目标；维护保留实际检查数据，不把目标强行记为成功。                                                                                                                         |
-| 18  | Add docs for dev                                                   | 下文提供依赖安装、Worker/纯函数测试、lint、Next 构建与 Pages 构建命令。                                                                       | 联合网络测试需要独立 Go 仓库及其二进制，构建成功不能代替运行验证。                                                                                                                             |
-| 19  | Migration to Terraform Cloudflare provider version 5.x             | [`deploy.tf`](../deploy.tf) 保留 provider `~> 5` 的资源声明。默认部署改用 Actions 与 [`provision.py`](../deploy/provision.py)。               | Terraform 为已有部署兼容路径；按[专用说明](terraform.md)提供分布式 secrets 与共享绑定，不能与 Actions 同时管理同一套资源。                                                                     |
-| 20  | Cloudflare D1 database                                             | [`init.sql`](../init.sql)、[`migrations`](../migrations) 与 Worker/Pages 共享 `UPTIMEFLARE_D1`，包括原生 state、探针历史、配置与通知 outbox。 | 新安装使用完整 schema；已有安装在发布前按序执行全部迁移。                                                                                                                                      |
+| 18  | Add docs for dev                                                   | 下文提供依赖安装、Worker/纯函数测试、lint、Next 静态构建与 Worker 构建命令。                                                                       | 联合网络测试需要独立 Go 仓库及其二进制，构建成功不能代替运行验证。                                                                                                                             |
+| 19  | Migration to Terraform Cloudflare provider version 5.x             | 上游已完成 provider 5.x 迁移；本分支改用 Actions 与 [`provision.py`](../deploy/provision.py) 的统一 Worker 部署。               | 旧 Terraform 与 Pages 资源声明已移除，部署入口只允许已准备好的 state-v2 数据库。                                                                     |
+| 20  | Cloudflare D1 database                                             | [`init.sql`](../init.sql)、[`migrations`](../migrations) 与统一 Worker 绑定 `UPTIMEFLARE_D1`，包括原生 state、探针历史、配置与通知 outbox。 | 新安装使用完整 schema；已有安装在发布前按序执行全部迁移。                                                                                                                                      |
 | 21  | Scheduled maintenances (via IIFE)                                  | 旧源码 `maintenances` 数组仍为初始回退；新管理界面通过 [`expandMaintenances`](../util/maintenance.ts) 展开日/周/月计划。                      | 重复按指定 IANA 时区的本地时刻与固定持续时间计算；DST 不存在的时刻跳过，月底日期取该月最后一天，窗口有界。                                                                                     |
 | 22  | Simpler config example                                             | 普通操作使用管理页名称选择，ID 自动生成；Go 探针只需服务端地址与独立令牌。                                                                    | 每目标周期默认 300 秒、超时默认 5000 毫秒；有需要时才填写覆盖值。                                                                                                                              |
 | 23  | Upcoming maintenances                                              | [`OverallStatus`](../components/OverallStatus.tsx) 可展开未来维护；提示颜色由页面设置管理。                                                   | 重复计划仅展开需要的保留窗口及未来 30 天，不无限生成事件。                                                                                                                                     |
@@ -36,7 +36,7 @@
 | 28  | Customizable footer                                                | 管理页“页面设置” → 服务端 HTML 清理 → D1 → [`Footer`](../components/Footer.tsx)。                                                             | 限定标签、属性、协议与样式；留空使用默认页脚。                                                                                                                                                 |
 | 29  | New header logo                                                    | 页面设置可修改 Logo、favicon、标题与导航；[`Header`](../components/Header.tsx) 使用动态设置。                                                 | 支持安全的 HTTP/HTTPS 地址或站内路径，公开页面不包含目标鉴权配置。                                                                                                                             |
 | 30  | Improve CPU time usage                                             | 原生 state 保留列式/RLE/hex 编码；探针写入事务增量更新统计与日桶，公共读取范围有界；折线图按展开挂载。                                        | 控制并发、历史、目标与分配数量；没有把上游历史 benchmark 当作当前硬件性能承诺。                                                                                                                |
-| 31  | Local deployment (docs WIP)                                        | 本地 Worker/Pages 构建与 Docker 流程见下文；Go 探针可直接运行独立二进制。                                                                     | 本地运行使用真实 Miniflare/Workerd D1；地区放置、Email binding 和第三方服务仍需对应环境。                                                                                                      |
+| 31  | Local deployment (docs WIP)                                        | 本地统一 Worker 构建与 Docker 流程见下文；Go 探针可直接运行独立二进制。                                                                     | 本地运行使用真实 Miniflare/Workerd D1；地区放置、Email binding 和第三方服务仍需对应环境。                                                                                                      |
 
 ## 管理页与最少配置
 
@@ -46,7 +46,7 @@
 
 目标标题旁的“暂停 / 恢复”用于修改该目标的监控开关，统一保存后生效。暂停保留目标配置、分配关系和历史记录，计入顶部“关闭”数量，不计入正常或异常数量；首页隐藏暂停目标，全部目标都已暂停的分组也会隐藏。暂停目标不发送失败、恢复通知。Cloudflare 不再调度该目标，独立探针在下一次配置刷新后停止新检查，已落盘的历史积压仍可上传。恢复后自动重新下发目标，并等待新的检查结果再判断通知状态。
 
-顶部状态区以紧凑色块显示整体状态，下方仅统计“正常、关闭、维护、异常”四类。关闭优先于维护；维护期间不把该目标的测量结果算入异常。默认周期及超时仍分别为 300 秒和 5000 毫秒。服务端支持最多 100 个监控目标和 330 个目标与探针分配组合，公共历史读取保持固定数量的批量查询；Cloudflare 对到期目标分批调度，避免大量新目标集中在一次调用。
+顶部状态区以紧凑色块显示整体状态，下方仅统计“正常、关闭、维护、异常”四类。关闭优先于维护；维护期间不把该目标的测量结果算入异常。默认周期及超时仍分别为 300 秒和 5000 毫秒。服务端支持最多 500 个监控目标和 1650 个目标与探针分配组合，公共历史读取保持固定数量的批量查询；Cloudflare 对到期目标分批调度，避免大量新目标集中在一次调用。
 
 网页目标至少选择一个执行探针。没有 `probes` 的旧源码监控属于原生兼容路径，不是网页新建目标的形式。
 
@@ -190,15 +190,15 @@ npm --prefix worker run typecheck
 node --test util/*.test.cjs
 npm run lint
 npm run build
-npx --no-install @cloudflare/next-on-pages
+npm run build:worker
 ```
 
-`npm run dev` 启动 Next.js 视图开发服务器；需要绑定 D1 的 API 与管理员保存，应使用构建后的 Wrangler/Pages 本地流程。Next.js 单独启动不等同于完整 Worker/Pages 服务。
+`npm run dev` 启动 Next.js 视图开发服务器；需要绑定 D1 的 API 与管理员保存，应使用构建后的统一 Wrangler 本地流程。Next.js 单独启动只提供视图开发。
 
-生产部署使用本仓库 `.github/workflows/deploy.yml`：检查、构建、幂等创建共享 D1、部署 Worker/Pages、设置 secrets 并处理自定义域名。所需 GitHub Secrets、迁移和绑定见[安装说明](external-probes.md)。先审查再推送 `main`；源码示例不放真实凭据。
+生产部署使用本仓库 `.github/workflows/deploy.yml`：检查、构建、幂等创建共享 D1、部署统一 Worker 与静态资源、设置 secrets 并处理自定义域名。所需 GitHub Secrets、迁移和绑定见[安装说明](external-probes.md)。先审查再推送 `main`；源码示例不放真实凭据。
 
-本地 Worker/Pages 与 Docker 的完整运行步骤见[本地部署](local-deployment.md)：共享 `/app/.wrangler/state`，Pages 默认 8788，仅发布到宿主回环地址；Worker 8787 留在内部。开发 HTTPS 可使用本地自签证书，正式使用需可信 TLS。容器构建成功与持续调度、写入、重启持久化分别验证，不把本地运行视为真实地区放置或 Email binding 的验收。
+本地统一 Worker 与 Docker 的完整运行步骤见[本地部署](local-deployment.md)：持久化 `/app/.wrangler/state`，统一入口默认 8788，仅发布到宿主回环地址。开发 HTTPS 可使用本地自签证书，正式使用需可信 TLS。容器构建成功与持续调度、写入、重启持久化分别验证，不把本地运行视为真实地区放置或 Email binding 的验收。
 
-已有 Terraform 部署参阅[Terraform 5 兼容流程](terraform.md)，与 Actions 选择一种资源管理方式。
+部署只支持 state-v2；已有历史必须先完成显式语义迁移，不能仅添加 schema 后启用新生产者。
 
 Go 探针与 HTTP 检测代理位于独立[探针仓库](https://github.com/WhereAreBugs/UptimeFlare-Distributed-prober)，构建需要 Go 1.26。二进制运行无需 Node.js 或 C 编译器；遥测默认关闭，只有显式开启后初始化 OpenTelemetry 导出器。

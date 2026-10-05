@@ -1,4 +1,4 @@
-> 统一 Worker/state-v2 改造：静态资源、API、Cron、区域 DO 与协调 DO 使用一个入口。构建及本地运行见 [本地部署](docs/local-deployment.md)，协议、容量、迁移和回滚见 [state-v2](docs/state-v2.md)，本地测试及资源对比见 [验收记录](docs/refactor-validation.md)，生产续作见 [部署记录](docs/refactor-deployment.md)。旧 Pages/Terraform 步骤仅作兼容记录。
+> 统一 Worker/state-v2 改造：静态资源、API、Cron、区域 DO 与协调 DO 使用一个入口。构建及本地运行见 [本地部署](docs/local-deployment.md)，协议、容量、迁移和回滚见 [state-v2](docs/state-v2.md)，本地测试及资源对比见 [验收记录](docs/refactor-validation.md)，生产续作见 [部署记录](docs/refactor-deployment.md)。旧 Pages、Terraform 部署入口已移除；部署与本地启动只支持 state-v2。
 
 <div align="right">
   <a title="English" href="README.md"><img src="https://img.shields.io/badge/-English-A31F34?style=for-the-badge" alt="English" /></a>
@@ -82,7 +82,7 @@ The checklist retains upstream history, including retired items. The [feature ma
 - [x] Compatibility date update
 - [x] Scheduled Maintenance
 - [x] Add docs for dev
-- [x] Migration to Terraform Cloudflare provider version 5.x
+- [x] Migration to Terraform Cloudflare provider version 5.x (upstream history; this fork now uses unified Worker deployment)
 - [x] Cloudflare D1 database
 - [x] Scheduled maintenances (via IIFE)
 - [x] Simpler config example
@@ -98,4 +98,4 @@ The checklist retains upstream history, including retired items. The [feature ma
 
 ## Deployment documentation
 
-See [Docker and local Wrangler deployment](docs/local-deployment.md) for shared persistent D1, runtime secrets and local HTTPS. See [optional Terraform 5 deployment](docs/terraform.md) for Worker/Pages bindings, Durable Object migration and SQL initialization.
+See [Docker and local Wrangler deployment](docs/local-deployment.md) for the unified Worker, persistent D1, runtime secrets and local HTTPS. Production uses GitHub Actions and state-v2; obsolete Pages and Terraform deployment paths have been removed.

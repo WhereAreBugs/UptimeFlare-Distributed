@@ -23,7 +23,7 @@ docker run --rm --name uptimeflare-local -p 127.0.0.1:8788:8788 \
   --env PROBE_TOKENS --env ADMIN_PASSWORD --env ADMIN_SESSION_SECRET uptimeflare-local
 ```
 
-默认 `UPTIMEFLARE_PORT=8788`，旧 `UPTIMEFLARE_PAGES_PORT` 仍可作为端口别名。单独的 Worker 8787/Pages 8788 组合已移除。`UPTIMEFLARE_LOCAL_PROTOCOL` 默认 http，`UPTIMEFLARE_STATE_VERSION` 默认 1，兼容已有卷。切换 2 之前先按 `state-v2.md` 验证并迁移数据库；直接手工 Wrangler 配置默认使用 2，只用于已经准备好的数据库。
+默认 `UPTIMEFLARE_PORT=8788`，`UPTIMEFLARE_LOCAL_PROTOCOL=http`，`UPTIMEFLARE_STATE_VERSION=2`。全新空数据库自动初始化为 v2；既有 v1 或未标记且含历史的数据库会阻止启动，必须先按 [state-v2](state-v2.md) 完成语义迁移。入口拒绝显式设置 v1，不再提供 Pages 或双端口启动路径。
 
 启动幂等添加 schema，数据卷保留配置和历史；入口生成临时私有 Wrangler 配置与 `.dev.vars`，退出后删除。顺序的调度循环等待一次 `/__scheduled` 完成才运行下一次，任何运行子进程失败会停止其余进程，tini 转发信号。`Ctrl+C`、Docker stop 都会结束调度和 Worker。不要在外部再建立重复 Cron。
 
@@ -39,7 +39,7 @@ node scripts/management-smoke.mjs
 node scripts/public-cache-smoke.mjs
 node scripts/dashboard-smoke.mjs
 node scripts/coordinator-smoke.mjs
-python3 -m unittest discover -s deploy -p 'test_state_v2.py'
+python3 -m unittest discover -s deploy -p 'test_*.py'
 ```
 
 smoke 使用虚构配置和独立临时存储，不连接生产目标。`dashboard-smoke.mjs --preview` 在 8794 提供 500 目标容量样例，仅用于本地浏览器验收；默认运行完成后退出并清理。

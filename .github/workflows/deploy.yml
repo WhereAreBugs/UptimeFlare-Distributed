@@ -12,7 +12,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     env:
-      PAGES_PROJECT: uptimeflare-distributed
       WORKER_NAME: uptimeflare-distributed
       D1_DATABASE: uptimeflare-distributed-d1
       STATUS_DOMAIN: status.catxxp123.top
@@ -44,7 +43,7 @@ jobs:
         run: node scripts/public-cache-smoke.mjs
       - name: Verify real Coordinator and regional DO RPC, replay and reconstruction
         run: node scripts/coordinator-smoke.mjs
-      - run: python3 -m unittest discover -s deploy -p 'test_state_v2.py'
+      - run: python3 -m unittest discover -s deploy -p 'test_*.py'
       - uses: actions/upload-artifact@v4
         with:
           name: unified-static-assets
@@ -55,13 +54,13 @@ jobs:
     if: vars.UNIFIED_DEPLOY_APPROVED == '1'
     runs-on: ubuntu-latest
     env:
-      PAGES_PROJECT: uptimeflare-distributed
       WORKER_NAME: uptimeflare-distributed
       D1_DATABASE: uptimeflare-distributed-d1
       STATUS_DOMAIN: status.catxxp123.top
       DNS_ZONE: catxxp123.top
       UNIFIED_DEPLOY_APPROVED: '1'
-      STATE_STORAGE_VERSION: ${{ vars.STATE_STORAGE_VERSION || '1' }}
+      STATE_STORAGE_VERSION: '2'
+      CRON_ENABLED: ${{ vars.CRON_ENABLED || '1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

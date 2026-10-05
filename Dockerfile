@@ -36,6 +36,6 @@ EXPOSE 8788
 VOLUME ["/app/.wrangler/state"]
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
-    CMD code=$(curl -ks -o /dev/null -w '%{http_code}' "${UPTIMEFLARE_LOCAL_PROTOCOL:-http}://127.0.0.1:${UPTIMEFLARE_PAGES_PORT:-8788}/api/admin/config") && test "$code" = 401
+    CMD code=$(curl -ks -o /dev/null -w '%{http_code}' "${UPTIMEFLARE_LOCAL_PROTOCOL:-http}://127.0.0.1:${UPTIMEFLARE_PORT:-8788}/api/admin/config") && test "$code" = 401
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/entrypoint.sh"]

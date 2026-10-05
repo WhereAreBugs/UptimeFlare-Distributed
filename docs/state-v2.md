@@ -15,7 +15,7 @@
 | `/api/probes/config`、`/api/probes/ingest` | Go 协议 version=1，gzip、最多 200 个结果、稳定 batch_id 与持久化后 ACK 保持兼容 |
 | 区域 RPC | version=1，runId、完整配置 SHA256、明确结果集合；可乱序，不允许重复、遗漏或非法数值 |
 | 协调 RPC | version=1，schema=2、regional=1、probe=1；稳定对象 `state-v2`，支持提交查询及重放 |
-| 存储选择 | `STATE_STORAGE_VERSION=1` 保留旧生产者；2 使用热冷表，必须先完成验证迁移 |
+| 存储选择 | 生产部署和本地入口只接受 `STATE_STORAGE_VERSION=2`；已有历史必须先完成验证迁移 |
 
 公开 DTO 不含目标地址、请求方法、请求头、正文、代理凭据、通知配置或管理凭据。显示名称、公开链接、分组和必要的内部关联 ID 可进入公共协议；ID 不显示在 UI。公开链接拒绝 userinfo/危险协议，并过滤敏感查询参数。错误按阶段/代码重建安全文案；私有完整探针错误只存放在原始块中。目标、代理、位置查询、Globalping API 和 Webhook 均禁止自动重定向。HTTP/代理正文限 1 MiB，超时覆盖必要的正文读取，结束或超时后释放流。
 
@@ -75,7 +75,7 @@ python3 deploy/state_v2.py PRIVATE.sqlite --rollback --backup NEW-pre-rollback.s
 python3 deploy/state_v2.py PRIVATE.sqlite --restore NEW-full.sqlite
 ```
 
-`--apply`/`--rollback` 自动在修改前创建全库备份；全库恢复覆盖配置、Token、outbox、历史和其他表。SQLite 转换在单写事务中完成，租约续期且异常回滚；plain/compact/gzip 源格式完整校验，转换比较全部字段与稀疏元数据。回滚版本是**本次改造代码 + STATE_STORAGE_VERSION=1**，不是任意旧二进制。回滚展开 v2 样本及稀疏字段；若新原生延迟无法由旧 16-bit 整数无损表达，拒绝数据回滚，应使用完整备份恢复。回滚后可识别并重新迁移。
+`--apply`/`--rollback` 自动在修改前创建全库备份；全库恢复覆盖配置、Token、outbox、历史和其他表。SQLite 转换在单写事务中完成，租约续期且异常回滚；plain/compact/gzip 源格式完整校验，转换比较全部字段与稀疏元数据。离线回滚工具仅用于迁移演练和数据格式恢复；生产部署及本地服务入口均拒绝 v1，不会重新启动旧生产者。回滚展开 v2 样本及稀疏字段；若新原生延迟无法由旧 16-bit 整数无损表达，拒绝数据回滚，应使用完整备份恢复。回滚后可识别并重新迁移。
 
 D1 操作工具：
 

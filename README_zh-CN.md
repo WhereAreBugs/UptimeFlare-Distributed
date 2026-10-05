@@ -71,7 +71,7 @@
 - [x] 更新兼容日期
 - [x] 计划维护
 - [x] 开发文档
-- [x] Terraform Cloudflare provider 5.x 迁移
+- [x] Terraform Cloudflare provider 5.x 迁移（上游历史，本分支已改用统一 Worker 部署）
 - [x] Cloudflare D1 数据库
 - [x] 通过 IIFE 生成计划维护
 - [x] 更简单的配置示例
@@ -87,4 +87,4 @@
 
 ## 部署文档
 
-[Docker 与本地 Wrangler 部署](docs/local-deployment.md)说明共享持久化 D1、运行时密钥和本地 HTTPS；[可选 Terraform 5 部署](docs/terraform.md)说明 Worker/Pages 绑定、Durable Object 迁移及 SQL 初始化。
+[Docker 与本地 Wrangler 部署](docs/local-deployment.md)说明统一 Worker、持久化 D1、运行时密钥和本地 HTTPS。生产采用 GitHub Actions 与 state-v2，旧 Pages 和 Terraform 部署入口已移除。

@@ -1,6 +1,6 @@
 # 外部 Go 探针与多探针汇总
 
-在原 UptimeFlare 的 Worker/Pages 与 D1 架构上添加外部探针。原 Cloudflare 定时检测仍用于未设置 `probes` 的监控；设置该字段的目标由分配的 Go 或内置 Cloudflare 探针负责。服务端只检测明确分配给 Cloudflare 的目标。
+本分支通过统一 Worker、Static Assets 与 state-v2 D1 接收外部探针。原 Cloudflare 定时检测仍用于未设置 `probes` 的监控；设置该字段的目标由分配的 Go 或内置 Cloudflare 探针负责。服务端只检测明确分配给 Cloudflare 的目标。
 
 ## 服务端配置
 
@@ -36,26 +36,21 @@ monitors: [
 
 令牌长度 24–512 字符，不允许空白或重复。可用 `openssl rand -hex 32` 生成。不要把真实令牌提交到源码。身份由令牌映射，不接受客户端任意指定探针 ID；上传目标必须属于该身份的 `probes` 分配。
 
-本分布式版本通过 `.github/workflows/deploy.yml` 自动部署：向 `main` 推送或手动触发后，执行验证、构建，幂等创建共享 D1 和 Pages 项目，配置 production bindings，发布 Worker 与 Pages，绑定自定义域名。需要 GitHub Actions Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`PROBE_TOKENS`、`ADMIN_PASSWORD`（至少 16 字符）、`ADMIN_SESSION_SECRET`（至少 32 字符）。Secrets 只在部署步骤提供，预览环境不注入生产秘密。资源名称和域名在工作流的非秘密环境变量中修改。`deploy/provision.py` 不删除其他资源，发现已有 DNS 指向其他项目时停止。原 `deploy.tf` 保留供已有 Terraform 部署使用，但本仓库默认工作流不运行它。
+本分布式版本通过 `.github/workflows/deploy.yml` 自动部署：向 `main` 推送或手动触发后，验证并构建静态资源与统一 Worker，幂等准备 D1/KV、两类 DO 和自定义域名。需要 GitHub Actions Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`PROBE_TOKENS`、`ADMIN_PASSWORD`（至少 16 字符）、`ADMIN_SESSION_SECRET`（至少 32 字符）。Secrets 仅提供给生产部署步骤。`UNIFIED_DEPLOY_APPROVED=1` 启用部署；`CRON_ENABLED=0` 可在额度故障时保持调度暂停。部署固定使用 state-v2，并核对数据库版本；旧 Pages 与 Terraform 路径已移除。
 
-`/api/probes/config` 与 `/api/probes/ingest` 可通过 Worker 或 Pages 同源访问。推荐探针配置 Pages 状态页地址，从而只维护一个地址。这两个精确路径由独立 bearer 鉴权，状态页原有 Basic 密码保护继续用于其他页面与 API。
+`/api/probes/config` 与 `/api/probes/ingest` 使用同一个状态页域名，分别由探针 bearer 令牌鉴权。其余页面与公开 API 遵循状态页密码保护；管理 API 使用独立管理鉴权。
 
 ## D1 安装与升级
 
-新部署：`deploy/provision.py prepare` 自动执行更新后的 `init.sql`，包含新表。已有 D1：先执行幂等迁移，再发布新 Worker 与 Pages：
+新部署的 `deploy/provision.py prepare` 创建完整 `init.sql` schema，并将刚创建的空数据库标记为 v2。已有数据库不会自动改写格式；先停止旧写入入口并按 [state-v2 迁移](state-v2.md) 完成严格语义验证。仅执行 SQL schema 迁移不能代替数据迁移；不得恢复旧 Pages/Worker 或在部署时重复全历史回填。
 
-```sh
-cd worker
-npx wrangler d1 migrations apply uptimeflare_d1 --remote
-```
+`worker/wrangler.toml` 默认使用 v2。更换示例数据库和 KV ID 后才能直接发布；自动工作流由 `provision.py` 生成真实生产绑定。`D1_VERIFIED_SCHEMA_HASH` 和 `D1_VERIFIED_DATABASE_ID` 可避免对已验证 schema 重复执行 DDL，数据库版本仍会检查。
 
-`worker/wrangler.toml` 已设置迁移目录。先把示例 database ID 换成实际绑定。需包含 `0001`–`0007` 全部迁移；`0005_monitor_schedule.sql` 添加内置与原生目标的调度租约表，`0006_probe_history.sql` 从现有五分钟桶回填日汇总并创建稀疏诊断元数据表。回填以重算方式执行，重跑不会双计；如果旧 Worker 在回填后仍写入过数据，新 Worker 发布后再执行一次 `0006` SQL 文件可同步日汇总。`0007_notification_observations.sql` 保存通知宽限期及已通知状态。自动部署在切换新 Worker/Pages 后再次幂等回填日汇总。迁移不重写原 compact state，也不修改已保存的目标、显式超时或管理配置版本。
-
-本地运行时，分别给 Worker 和 Pages 的本地变量文件设置测试用 `PROBE_TOKENS`；Worker 与 Pages 必须连接相同 D1。Docker 自托管会从容器环境读取变量，需给两者同样的 `PROBE_TOKENS` 并持久化 `.wrangler/state`。
+本地和 Docker 只运行一个 Worker，设置三个测试 Secrets 并持久化 `.wrangler/state`，见 [本地部署](local-deployment.md)。全新空数据自动初始化 v2；已有历史未迁移时拒绝启动。
 
 ## 网页配置管理
 
-公开状态页无需登录。`/admin` 使用独立管理密码，密码和会话签名密钥设置为 Worker/Pages secrets，不写入公开源码。会话使用 Secure、HttpOnly、SameSite=Strict Cookie，8 小时过期；写操作校验同源 Origin，管理 API 不开放 CORS。每个来源地址每 15 分钟最多 10 次登录，D1 仅保存地址哈希。更换管理密码或签名密钥会使已有会话失效。
+公开状态页无需登录。`/admin` 使用独立管理密码，密码和会话签名密钥设置为统一 Worker secrets，不写入公开源码。会话使用 Secure、HttpOnly、SameSite=Strict Cookie，8 小时过期；写操作校验同源 Origin，管理 API 不开放 CORS。每个来源地址每 15 分钟最多 10 次登录，D1 仅保存地址哈希。更换管理密码或签名密钥会使已有会话失效。
 
 管理页按监控目标、探针、通知模板、分组、维护计划、页面设置和管理 Token 七个标签页管理，配置草稿可跨标签保留并统一保存。登录后可以添加、编辑、删除 HTTP/HTTPS/TCP/SSL/ICMP 目标，设置检测周期、单次超时、状态码、关键词、请求头、请求体和探针分配，以及编辑探针显示名称与地区。页面不显示内部标识；目标和通知模板的标识自动生成并处理冲突，编辑现有目标会保留历史。新探针身份仍需先在 `PROBE_TOKENS` 配置独立令牌，重复的已注册探针条目和目标分配会自动合并。管理 Token 的创建和撤销立即生效，按分组授权查询或控制权限，见[管理 API](management-api.md)。
 
@@ -88,7 +83,7 @@ Cloudflare 没有固定服务器 IP，默认显示最近执行节点，例如 `C
 ## 上线探针
 
 ```sh
-export LIGHT_PROBER_SERVER=https://your-status.pages.dev
+export LIGHT_PROBER_SERVER=https://status.example.com
 export LIGHT_PROBER_TOKEN=the-token-for-sg
 ./light-prober
 ```
@@ -114,9 +109,9 @@ Go 探针区分 `dns`、`tcp`、`tls`、`http`、`body`、`icmp`、`proxy`、`co
 
 接收端一次 D1 事务处理一批样本：主键去重、单调更新 latest、增量更新总计、阶段总计和日汇总、重建受影响的五分钟桶。状态页读取总计、最多 91 个 UTC 日桶与最近 12 小时的五分钟桶，避免每次访问扫描 90 天原始样本。证书到期时间、剩余天数与 ICMP 延迟仅在存在这些可选字段时占用元数据行，同一记录的重放不能篡改或补写元数据。
 
-当前限制为最多 100 个监控配置、32 个独立令牌以及 1 个内置 Cloudflare 探针、**330 个监控与探针分配组合**。近期历史和失败明细均有界；首页只加载最新状态与累计统计，单个目标的详细历史按需加载，列表按组分页并限制历史请求并发。这些限制控制 Worker CPU、D1 读取和页面大小；更大部署应先做容量测量再调整配置上限。
+当前限制为最多 500 个监控配置、32 个独立令牌以及 1 个内置 Cloudflare 探针、**1650 个监控与探针分配组合**。近期历史和失败明细均有界；首页只加载最新状态与累计统计，单个目标的详细历史按需加载，列表按组分页并限制历史请求并发。这些限制控制 Worker CPU、D1 读取和页面大小；更大部署应先做容量测量再调整配置上限。
 
-原始样本与汇总保存约 90 天。每分钟 scheduled 任务有界删除过期数据，并同步扣除累积总计；大量历史补传过期后清理可能需要多轮。累计统计反映尚未清理的保留数据。latest 保留最后一次结果，使用该目标周期的两倍与最后检查时间判断过期。
+原始样本与汇总保存约 90 天。state-v2 每小时领取一次清理任务，按索引有界删除过期数据，并同步扣除累积总计；大量历史补传过期后清理可能需要多轮。累计统计反映尚未清理的保留数据。latest 保留最后一次结果，使用该目标周期的两倍与最后检查时间判断过期。
 
 ### 历史图表与事件
 
