@@ -38,6 +38,41 @@ const zero = (): ResourceCounts => ({
   doRequests: 0,
   doDurationMs: 0,
 })
+it('uses point lookups for legacy latest updates despite unrelated cold history', async () => {
+  await db.prepare('DELETE FROM probe_samples').run()
+  await db.prepare('DELETE FROM probe_latest').run()
+  await db
+    .prepare(
+      `WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<5000)
+    INSERT INTO probe_samples(probe_id,monitor_id,time,up,latency_ms,stage,code,message)
+    SELECT 'compat','cold',?-86400+i,1,10,'','','' FROM n`
+    )
+    .bind(now)
+    .run()
+  const counts = zero()
+  const results = Array.from({ length: 30 }, (_, i) => ({
+    monitor_id: 'compat-hot-' + i,
+    time: now,
+    up: true,
+    latency_ms: 12.5,
+  }))
+  await persistBatch(
+    { UPTIMEFLARE_D1: measureDatabase(db, counts), STATE_STORAGE_VERSION: '1' },
+    'compat',
+    results
+  )
+  expect(counts.rowsRead).toBeLessThan(1500)
+  const latest = await db
+    .prepare("SELECT time,latency_ms FROM probe_latest WHERE probe_id='compat'")
+    .all()
+  expect(latest.results).toHaveLength(30)
+  expect(latest.results.every((row) => row.time === now && row.latency_ms === 12.5)).toBe(true)
+  mkdirSync(new URL('../../.deployment/', import.meta.url), { recursive: true })
+  writeFileSync(
+    new URL('../../.deployment/legacy-lookup-regression.json', import.meta.url),
+    JSON.stringify({ coldSamples: 5000, submittedSamples: 30, ...counts }, null, 2)
+  )
+}, 30000)
 it('compares identical stable, outage, timeout, notification and backlog workloads using actual D1 metadata', async () => {
   const report: any = {
     local: true,

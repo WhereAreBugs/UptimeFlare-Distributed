@@ -348,7 +348,10 @@ export async function persistBatch(
     const runId = 'probe:' + probeId + ':' + (batchId ?? (await stableNotificationKey(results)))
     if (env.COORDINATOR_DO) {
       const coordinator = await getCoordinator(env)
-      const result = await withTimeout(25000, coordinator.commitProbe({ version: 1, runId, probeId, results, gate }))
+      const result = await withTimeout(
+        25000,
+        coordinator.commitProbe({ version: 1, runId, probeId, results, gate })
+      )
       if (result.version !== 1 || result.runId !== runId || !result.committed)
         throw new Error('Unconfirmed coordinated persistence')
       return
@@ -404,12 +407,14 @@ export async function persistBatch(
           : ''
       }`
     ).bind(probeId, payload, ...(gate ? [gate.scope, gate.key] : [])),
-    // Read the persisted sample, rather than the submitted one: a conflicting replay must not change latest.
+    // Read persisted samples so conflicting replays cannot change latest. Keep submitted
+    // identities on the outer side: otherwise SQLite may rescan all of a probe's history
+    // once per submitted identity instead of using the full primary key.
     env.UPTIMEFLARE_D1.prepare(
       `INSERT INTO probe_latest
       (probe_id, monitor_id, time, up, latency_ms, stage, code, message)
       SELECT s.probe_id, s.monitor_id, s.time, s.up, s.latency_ms, s.stage, s.code, s.message
-      FROM probe_samples s JOIN json_each(?) r
+      FROM json_each(?) r CROSS JOIN probe_samples s
         ON s.monitor_id = json_extract(r.value,'$.monitor_id') AND s.time = json_extract(r.value,'$.time')
       WHERE s.probe_id = ?
       ON CONFLICT(probe_id,monitor_id) DO UPDATE SET time=excluded.time, up=excluded.up,
@@ -614,7 +619,9 @@ export async function cleanupProbeResults(
         AND NOT EXISTS (SELECT 1 FROM probe_latest l WHERE l.probe_id=d.probe_id AND l.monitor_id=d.monitor_id AND l.time=d.time)
         ORDER BY d.time,d.probe_id,d.monitor_id LIMIT 5000)`
     ).bind(cutoff),
-    env.UPTIMEFLARE_D1.prepare('DELETE FROM probe_days WHERE (probe_id,monitor_id,time) IN (SELECT probe_id,monitor_id,time FROM probe_days WHERE checks<=0 LIMIT 1000)'),
+    env.UPTIMEFLARE_D1.prepare(
+      'DELETE FROM probe_days WHERE (probe_id,monitor_id,time) IN (SELECT probe_id,monitor_id,time FROM probe_days WHERE checks<=0 LIMIT 1000)'
+    ),
     env.UPTIMEFLARE_D1.prepare(
       `WITH expired AS (${expiredStages}), delta AS (
       SELECT b.probe_id,b.monitor_id,b.stage,SUM(b.failures) failures
