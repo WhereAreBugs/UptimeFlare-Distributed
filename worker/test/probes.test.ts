@@ -178,6 +178,48 @@ describe('authenticated probe contract', () => {
       ).status
     ).toBe(405)
   })
+
+  it('provides safe names and paused assignments for the local dashboard without status storage', async () => {
+    const response = await handleProbeRequest(
+      new Request('https://status.test/api/probes/config', {
+        headers: { Authorization: `Bearer ${TOKEN_A}` },
+      }),
+      env,
+      [
+        ...monitors,
+        {
+          id: 'paused',
+          name: 'Paused target',
+          method: 'GET',
+          target: 'https://private.test',
+          paused: true,
+          probes: ['a'],
+          headers: { Authorization: 'private-request-secret' },
+          body: 'private-body',
+        },
+      ],
+      undefined,
+      [{ id: 'a', name: 'Friendly name', location: 'Example ASN' }]
+    )
+    const config = (await response.json()) as any
+    expect(config.probe).toEqual({ name: 'Friendly name', location: 'Example ASN' })
+    expect(config.monitors.map((m: any) => m.id)).not.toContain('paused')
+    expect(config.display_monitors.map((m: any) => m.name)).toEqual(['Web', 'Paused target'])
+    expect(config.display_monitors[1]).toMatchObject({
+      paused: true,
+      intervalSeconds: 300,
+      timeout: 5000,
+    })
+    expect(JSON.stringify(config.display_monitors)).not.toContain('private-request-secret')
+    expect(JSON.stringify(config.display_monitors)).not.toContain('private.test')
+    expect(JSON.stringify(config)).not.toContain('private-body')
+    expect(
+      preflightProbeRequest(
+        new Request('https://status.test/api/probes/status', { method: 'POST' }),
+        env
+      )?.status
+    ).toBe(404)
+  })
   it('fails closed for malformed token registries and duplicated secrets', async () => {
     for (const value of [
       'invalid',

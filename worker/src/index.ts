@@ -83,7 +83,8 @@ const implementation = {
       request,
       env,
       workerConfig.monitors,
-      request.cf as IncomingRequestCfProperties | undefined
+      request.cf as IncomingRequestCfProperties | undefined,
+      workerConfig.probes
     )
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {

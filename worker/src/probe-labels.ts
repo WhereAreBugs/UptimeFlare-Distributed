@@ -29,12 +29,16 @@ export async function saveProbeLabel(env: ProbeEnv, id: string, name: string, lo
 }
 
 /** Only Cloudflare's request context supplies this data; never accept client headers/body. */
-export async function recordProbeNetwork(env: ProbeEnv, id: string, cf?: ProbeNetwork) {
+export function probeNetworkLabel(cf?: ProbeNetwork) {
   if (!cf || !Number.isInteger(cf.asn) || Number(cf.asn) < 1 || Number(cf.asn) > 4294967295) return
   const parts = [cf.country, cf.region, cf.city].map(label).filter(Boolean)
   const location = Array.from(new Set(parts)).join(' / ')
   if (!location) return // Missing platform metadata must not erase previously detected labels.
-  return saveProbeLabel(env, id, `${location} · AS${cf.asn}`, location)
+  return { name: `${location} · AS${cf.asn}`, location }
+}
+export async function recordProbeNetwork(env: ProbeEnv, id: string, cf?: ProbeNetwork) {
+  const detected = probeNetworkLabel(cf)
+  if (detected) return saveProbeLabel(env, id, detected.name, detected.location)
 }
 
 export async function getProbeDefinitions(env: ProbeEnv, probes: ProbeDefinition[]) {

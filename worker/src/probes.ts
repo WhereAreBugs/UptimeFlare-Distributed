@@ -23,7 +23,12 @@ import type {
   ProbeResult,
   ProbeSummary,
 } from '../../types/probes'
-import { CLOUDFLARE_PROBE_ID, recordProbeNetwork, type ProbeNetwork } from './probe-labels'
+import {
+  CLOUDFLARE_PROBE_ID,
+  recordProbeNetwork,
+  probeNetworkLabel,
+  type ProbeNetwork,
+} from './probe-labels'
 import { aggregateStatus, summarizeProbeDailyHistory } from '../../util/probe-status'
 import { MAX_MONITOR_PROBE_ASSIGNMENTS } from './limits'
 import { loadProbeCounters } from './probe-counters'
@@ -523,7 +528,8 @@ export async function handleProbeRequest(
   request: Request,
   env: ProbeEnv,
   monitors: MonitorTarget[],
-  network?: ProbeNetwork
+  network?: ProbeNetwork,
+  definitions: ProbeDefinition[] = []
 ): Promise<Response> {
   const preflight = preflightProbeRequest(request, env)
   if (preflight) return preflight
@@ -537,6 +543,8 @@ export async function handleProbeRequest(
     const probeId = authenticate(request, env)
     const assigned = assignedMonitors(monitors, probeId)
     if (expectedMethod === 'GET') {
+      const definition = definitions.find((probe) => probe.id === probeId)
+      const detected = probeNetworkLabel(network)
       try {
         await recordProbeNetwork(env, probeId, network)
       } catch {
@@ -546,10 +554,25 @@ export async function handleProbeRequest(
       return json({
         version: 1,
         probe_id: probeId,
+        probe: {
+          name: definition?.name || definition?.defaultName || detected?.name || '独立探针',
+          location: definition?.location || definition?.defaultLocation || detected?.location || '',
+        },
+        // Safe display metadata includes paused assignments. Request secrets stay
+        // exclusively in the active check configuration; no new storage/query.
+        display_monitors: assigned.map((monitor) => ({
+          id: monitor.id,
+          name: monitor.name || '未命名目标',
+          method: monitor.method,
+          paused: !!monitor.paused,
+          intervalSeconds: getMonitorIntervalSeconds(monitor),
+          timeout: monitor.timeout ?? DEFAULT_MONITOR_TIMEOUT_MS,
+        })),
         monitors: assigned
           .filter((monitor) => !monitor.paused)
           .map((monitor) => ({
             id: monitor.id,
+            name: monitor.name || '未命名目标',
             method: monitor.method,
             target: monitor.target,
             intervalSeconds: getMonitorIntervalSeconds(monitor),
