@@ -26,6 +26,7 @@ const mf = new Miniflare({
   },
   outboundService: async (req) => {
     assert.equal(new URL(req.url).hostname, 'collector.fixture')
+    assert.equal(req.headers.get('User-Agent'), 'uptimeflare-sre/1')
     const bytes = await req.arrayBuffer()
     exports.push(JSON.parse(gunzipSync(new Uint8Array(bytes)).toString()))
     return new Response('{}')

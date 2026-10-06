@@ -3,6 +3,33 @@ import { gunzipSync } from 'node:zlib'
 import { invocation, observe, span, traceparent, parseTraceparent } from '../src/telemetry'
 import type { Env } from '../src/index'
 afterEach(() => vi.unstubAllGlobals())
+it('counts partial OTLP rejection and bounds safe failure logging', async () => {
+  const logs = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init: any) => {
+      expect(init.headers.get('User-Agent')).toBe('uptimeflare-sre/1')
+      return Response.json({ partialSuccess: { rejectedSpans: '1', errorMessage: 'SECRET' } })
+    })
+  )
+  const env = {
+    TELEMETRY_ENABLED: '1',
+    OTEL_EXPORTER_OTLP_ENDPOINT: 'https://partial.invalid',
+    OTEL_EXPORTER_OTLP_HEADERS: '{}',
+    OTEL_TRACES_SAMPLER_ARG: '1',
+  } as Env
+  try {
+    await invocation(env, 'worker.fetch', async () => 42, { force: true })
+    expect(logs).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(logs.mock.calls[0][0])).toMatchObject({
+      event: 'telemetry_export_failure',
+      reason: 'partial_rejection',
+    })
+    expect(JSON.stringify(logs.mock.calls)).not.toContain('SECRET')
+  } finally {
+    logs.mockRestore()
+  }
+})
 it('exports gzip OTLP with a continuous parent chain and operational metrics only', async () => {
   const exports: any[] = []
   vi.stubGlobal(

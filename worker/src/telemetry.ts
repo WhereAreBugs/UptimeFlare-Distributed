@@ -71,6 +71,7 @@ type Buffer = {
   exporting: boolean
   failures: number
   dropped: number
+  nextFailureLog: number
   env: Env
 }
 // No D1/KV/DO storage or alarms: bounded, best-effort process telemetry.
@@ -87,6 +88,7 @@ function buffer(env: Env) {
       exporting: false,
       failures: 0,
       dropped: 0,
+      nextFailureLog: 0,
       env,
     }
     buffers.set(key, value)
@@ -163,6 +165,17 @@ export async function span<T>(
 async function send(env: Env, kind: 'metrics' | 'traces', body: unknown) {
   const text = JSON.stringify(body)
   if (new TextEncoder().encode(text).byteLength > MAX_BYTES) return false
+  const rejected = (status: number, reason: string) => {
+    const b = buffer(env),
+      now = Date.now()
+    if (now >= b.nextFailureLog) {
+      b.nextFailureLog = now + 60000
+      console.warn(
+        JSON.stringify({ event: 'telemetry_export_failure', signal: kind, status, reason })
+      )
+    }
+    return false
+  }
   try {
     const endpoint = new URL(env.OTEL_EXPORTER_OTLP_ENDPOINT!)
     if (
@@ -176,6 +189,7 @@ async function send(env: Env, kind: 'metrics' | 'traces', body: unknown) {
     const headers = new Headers(JSON.parse(env.OTEL_EXPORTER_OTLP_HEADERS!))
     headers.set('Content-Type', 'application/json')
     headers.set('Content-Encoding', 'gzip')
+    headers.set('User-Agent', 'uptimeflare-sre/1')
     const compressed = new Response(text).body!.pipeThrough(new CompressionStream('gzip'))
     const response = await fetch(endpoint.toString().replace(/\/$/, '') + '/v1/' + kind, {
       method: 'POST',
@@ -184,10 +198,45 @@ async function send(env: Env, kind: 'metrics' | 'traces', body: unknown) {
       redirect: 'manual',
       signal: AbortSignal.timeout(5000),
     })
-    await response.body?.cancel()
-    return response.ok
+    if (!response.ok) {
+      await response.body?.cancel()
+      return rejected(response.status, 'http')
+    }
+    // OTLP can acknowledge HTTP 200 while rejecting every record. Never log its body.
+    const reader = response.body?.getReader()
+    if (reader) {
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      try {
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          bytes += value.byteLength
+          if (bytes > 4096) return rejected(response.status, 'oversized_ack')
+          chunks.push(value)
+        }
+      } finally {
+        await reader.cancel()
+      }
+      if (bytes) {
+        const result = JSON.parse(chunks.map((chunk) => new TextDecoder().decode(chunk)).join(''))
+        const partial = result.partialSuccess ?? result.partial_success
+        if (
+          partial &&
+          Number(
+            partial.rejectedSpans ??
+              partial.rejected_spans ??
+              partial.rejectedDataPoints ??
+              partial.rejected_data_points ??
+              0
+          ) > 0
+        )
+          return rejected(response.status, 'partial_rejection')
+      }
+    }
+    return true
   } catch {
-    return false
+    return rejected(0, 'transport_or_ack')
   }
 }
 function resource(env: Env) {
