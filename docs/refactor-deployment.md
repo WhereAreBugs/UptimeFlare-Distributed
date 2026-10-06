@@ -4,9 +4,9 @@
 
 生产迁移及两台 Go 升级已经完成。2026-10-06 的 D1、配置读写、新 Cron 与 GitHub 自动部署已恢复；新样本、ACK、管理边界和手机交互均已验证。两台已配置独立的 OpenObserve 写入令牌，后端检测、上传及运行指标的新数据验收通过；令牌查询返回 401 是预期权限限制。生产验收完成，原自动续作已停止，详见生产报告文末。禁止自动升级付费、重复迁移、大导出或循环查询。
 
-运行代码保持 `6930e0a` 的语义；后续提交为验收和文档。2026-10-06 已恢复每分钟 Cron，STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0。短窗口计数通过活动版本设置开启后关闭，最终 METRICS_ENABLED=0；活动版本 ID 以私有生产续作记录与平台当前部署为准，不恢复已替代版本。两套服务端 CI 已通过；一项既有 5 秒测试超时在单次失败作业重跑后通过，部署验证中暂停显示元数据的旧断言已修正。
+当前服务端运行代码为 `e806660`，两台 Go 探针为 `f0d45d6`；v2 数据语义保持，新增 SRE 运行指标及栈追踪。详情见 [SRE 说明](sre-observability.md) 和生产报告文末。2026-10-06 已恢复每分钟 Cron，STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0。短窗口计数通过活动版本设置开启后关闭，最终 METRICS_ENABLED=0；活动版本 ID 以私有生产续作记录与平台当前部署为准，不恢复已替代版本。两套服务端 CI 已通过；一项既有 5 秒测试超时在单次失败作业重跑后通过，部署验证中暂停显示元数据的旧断言已修正。
 
-D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-budget.md)、[失败合并验收](packed-failures.md)。新格式不需 schema 迁移或全表重写，不得降级到忽略累计文档/合并失败格式的代码。额度恢复后核对合并失败的逐次时间、阶段累计、去重和 ACK。最新本地页面配套不增加云端状态上报/存储；两台 Go 已升级 `0f21ef2`，不再重复升级。已删除本次替代版本，当前平台只保留一个活动版本；旧 CI 归档和 `bin/refactor/` 的被替代构建已清理。
+D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-budget.md)、[失败合并验收](packed-failures.md)。新格式不需 schema 迁移或全表重写，不得降级到忽略累计文档/合并失败格式的代码。额度恢复后核对合并失败的逐次时间、阶段累计、去重和 ACK。最新本地页面配套不增加云端状态上报/存储；两台 Go 已升级 `f0d45d6`，不再重复升级。已删除本次替代版本，当前平台只保留一个活动版本；旧 CI 归档和 `bin/refactor/` 的被替代构建已清理。
 
 ## 范围与配置
 
@@ -14,7 +14,7 @@ D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-
 - GitHub：`WhereAreBugs/UptimeFlare-Distributed` 与 `WhereAreBugs/UptimeFlare-Distributed-prober`；CLI 在根 `bin/tools/gh`。
 - 活动 D1：`uptimeflare-distributed-d1`；公共 KV：`uptimeflare-distributed-public-status`；DO：新 Worker 的 `Coordinator` 和 `RemoteChecker`。保留当前数据与绑定。
 - 私有 `.deployment/cloudflare.json`、admin.json、probes.json、hosts.json、metadata.json、telemetry.json、telemetry-write-tokens.json 和 probe-*.env 是当前凭据/配置，保留并禁止输出或提交。telemetry.json 的通用 headers 不含鉴权；probe_headers 按探针保存独立写入鉴权，不能跨探针覆盖。
-- SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前运行版本 `0f21ef2`，真实 queue.db/config.json 与遥测设置均保留。当前构建在 `bin/light-prober` 与 `bin/dashboard-*`。旧 `bin/refactor/` 已删除。
+- SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前运行版本 `f0d45d6`，真实 queue.db/config.json 与遥测设置均保留。当前 macOS 构建在 `bin/light-prober`，生产 Linux 构建在 `bin/sre-linux-amd64`；旧验证构建已删除。旧 `bin/refactor/` 已删除。
 - 用户 logo 尺寸改动已保留，后续不得覆盖。
 
 ## 已完成的生产转换

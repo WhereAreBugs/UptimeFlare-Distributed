@@ -70,3 +70,12 @@ GitHub 部署作业受 `UNIFIED_DEPLOY_APPROVED` 变量约束。迁移完成并�
 2026-10-05 D1 行数优化补充：199 项 Worker、12 项 Python、类型检查、lint、dry-run、70 项管理 HTTP 断言、522 项无 D1 公开缓存检查及真实 DO 重建/重放通过。相同 200 条样本夹具下，集中历史读取 12800→180、集中新鲜结果读取 13172→448、五分钟间隔积压读取 13015→744；写入分别为 166→142、220→163、580→563。累计、失败、历史、事务回滚与重放零写入均验证，详见 [D1 行数验收](d1-row-budget.md)。本地数字不替代额度恢复后的生产新样本及 ACK 验收。
 
 2026-10-05 相同失败合并补充：完整 Worker 24 文件/207 项回归及最终参数分块的 9 项针对性回归、Python 13 项、类型检查、lint、完整 Next/Worker 构建、70 项管理 HTTP、522 项无 D1 公开缓存、500 目标容量及真实 DO 重建/重放通过。旧源码临时 checkout 与新代码运行同一虚构全失败批次，D1 读取 945→559、写入 1280→512；同日 288 次相同失败合并成一组精确时间序列且分页还原全部。临时基线 checkout 已删除，不包含私有探针运行统计，见 [失败合并验收](packed-failures.md)。
+
+
+## 2026-10-06 SRE 遥测补充
+
+Go 官方 OTLP HTTP exporter 的 gzip/protobuf metrics 与 traces 解码验证通过，包括父子 context、W3C 注入、采样关闭和错误脱敏；竞态、nootel、vet 及 Linux/macOS/Windows/FreeBSD 跨平台构建通过，跨平台 CI 37471893678 成功。指标聚焦执行、上传、配置同步、队列/存储和运行资源，不再导出目标可达性/证书状态。
+
+Worker 25 文件/212 项回归、类型检查和 Python 18 项通过；真实产物联调验证 Worker→RPC→Coordinator→D1、gzip OTLP 和持久 ACK。追加验证 HTTP 200 的 OTLP 部分拒收与安全诊断节流；真实 RPC 联调使用 Coordinator 转发路径，确认没有新增提交记录或遥测存储。此前完整 Next/lint、管理/公开缓存、500 目标和 Coordinator 产物验证通过，最终两套 CI 成功。
+
+生产后端已验证两台升级后的新运行指标与各自真实完整上传 trace，普通 Worker 与 Coordinator 的转发开关已在自动部署后核对为 1，常态采样为 5%。平台 CPU 尚未进入 OpenObserve：当前 Cloudflare Token 缺少原生导出权限；所有应用 duration 均为墙钟时间。完整范围与限制见 [SRE 说明](sre-observability.md)。

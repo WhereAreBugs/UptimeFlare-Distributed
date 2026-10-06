@@ -2,6 +2,19 @@
 
 遥测关注探针与 Worker 的资源、吞吐、耗时和运行故障。目标可达性继续由状态站保存与展示，不在 SRE 指标中重复导出。Go 指标和标准 OTLP trace 由官方 SDK 输出；Worker 使用有界的 OTLP HTTP/JSON 批量导出，兼容 OpenObserve。两端使用独立的组织写入令牌，查询/管理凭据不下发到生产探针或 Worker。
 
+## 探针指标
+
+| 指标 | 内容 |
+| --- | --- |
+| `probe.process.cpu`, `probe.process.memory.peak` | 用户/内核 CPU 累计秒数；Linux/macOS/FreeBSD 峰值 RSS，Windows 提供 CPU |
+| `probe.runtime.*` | Go 堆/运行内存、分配/释放、GC 次数与 CPU、协程、GOMAXPROCS、运行时间 |
+| `probe.checks`, `probe.check.duration`, `probe.checks.active` | 执行吞吐、完整执行耗时、当前并发；不导出可达性 |
+| `probe.operations`, `probe.operation.duration`, `probe.config.failures` | 配置同步、队列读写、ACK 的数量、失败与耗时 |
+| `probe.uploads`, `probe.upload.duration`, `probe.upload.bytes` | 上报批次数、失败、耗时和压缩后字节数 |
+| `probe.queue.*`, `probe.storage.*` | 积压条数/字节、最旧结果年龄、数据库占用与容量上限 |
+
+默认一分钟采集；追踪采用 ParentBased 5% 采样，有界批处理队列 256、每批 64 个 span、gzip 和 5 秒超时。`--telemetry` 可关闭，`nootel` 构建移除 SDK。完整配置见[探针说明](https://github.com/WhereAreBugs/UptimeFlare-Distributed-prober#可选遥测)。
+
 ## 云端指标和追踪
 
 | 指标 | 内容 |
@@ -22,6 +35,8 @@
 当普通 fetch 上下文的出站路由与 DO/Cron 不一致时，可以设 `OTEL_EXPORTER_USE_COORDINATOR=1`，将根 fetch 的遥测批次通过既有 Coordinator 转发；没有新增对象或持久化。转发独立于提交队列，并发最多 2、等待最多 8，满载丢弃遥测，保持监控 ACK。额外开销是每个已采样调用一次 traces RPC，以及约每分钟一次 metrics RPC；`worker.telemetry.relay.calls` 可观测这些调用。生产当前启用此项：普通 Worker 直连既定写入地址返回 307，DO 从同地址能写入。导出明确识别 HTTP/OTLP 部分拒收，并最多每分钟记录一次不含响应正文的安全诊断。
 
 指标可以按 service、scope、operation、probe_id 筛选。追踪界面按 `trace_id` 查看调用树，`span_id`/`parent_span_id` 对应具体操作；不要将这些 ID 加为高基数指标标签。Go 的执行结果异步落盘，后续上传是独立 trace，原队列与 batch ID 未改变。
+
+上传的父子链为 `upload.batch → receiver.POST → worker.fetch → rpc.commitProbe → coordinator.commitProbe → d1.batch`，本地 ACK 是 upload.batch 的另一子 span。OpenObserve 的 `default` traces stream 保存 `trace_id`、`span_id`，父 span 列名为 `reference_parent_span_id`。目标执行与后来批量上传跨越持久队列，当前不把两次操作伪装成同一 trace。
 
 ## 平台 CPU 与内存的边界
 
