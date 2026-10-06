@@ -1,3 +1,4 @@
+import { invocation } from './telemetry'
 import { withResources } from './resources'
 export { Coordinator } from './coordinator'
 import type { Coordinator } from './coordinator'
@@ -30,6 +31,12 @@ export interface Env {
   PACKED_PROBE_COUNTERS?: string
   COORDINATOR_DO?: DurableObjectNamespace<Coordinator>
   STATE_STORAGE_VERSION?: string
+  TELEMETRY_ENABLED?: string
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string
+  OTEL_EXPORTER_OTLP_HEADERS?: string
+  OTEL_TRACES_SAMPLER_ARG?: string
+  OTEL_ENVIRONMENT?: string
+  OTEL_SERVICE_VERSION?: string
   METRICS_ENABLED?: string
   MIGRATION_MODE?: string
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
@@ -149,22 +156,54 @@ const implementation = {
 }
 
 export default {
-  fetch(request: Request, env: Env) {
-    return withResources(env, 'root-fetch', (measured) =>
-      implementation.fetch(request, measured)
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return invocation(
+      env,
+      'worker.fetch',
+      (env) =>
+        withResources(env, 'root-fetch', (measured) => implementation.fetch(request, measured)),
+      {
+        request,
+        parent:
+          preflightProbeRequest(request, env) === null
+            ? request.headers.get('traceparent')
+            : undefined,
+        waitUntil: (p) => ctx.waitUntil(p),
+      }
     ).catch(() => Response.json({ error: 'Service temporarily unavailable' }, { status: 503 }))
   },
   scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    return withResources(env, 'root-cron', (measured) =>
-      implementation.scheduled(event, measured, ctx)
+    return invocation(
+      env,
+      'worker.cron',
+      (env) =>
+        withResources(env, 'root-cron', async (measured) => {
+          const background: Promise<any>[] = []
+          const scoped = {
+            ...ctx,
+            waitUntil: (p: Promise<any>) => {
+              background.push(p)
+              ctx.waitUntil(p)
+            },
+          } as ExecutionContext
+          try {
+            await implementation.scheduled(event, measured, scoped)
+          } finally {
+            await Promise.allSettled(background)
+          }
+        }),
+      { force: true, waitUntil: (p) => ctx.waitUntil(p) }
     )
   },
 }
 
-export class RemoteChecker extends DurableObject {
+export class RemoteChecker extends DurableObject<Env> {
   private executor = new RegionalExecutor()
-  async checkBatch(request: RegionalRequest) {
-    return this.executor.checkBatch(request)
+  async checkBatch(request: RegionalRequest, parent?: string) {
+    return invocation(this.env, 'regional.checkBatch', () => this.executor.checkBatch(request), {
+      parent,
+      waitUntil: (p) => this.ctx.waitUntil(p),
+    })
   }
   async protocol() {
     return { regional: 1 }

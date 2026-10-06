@@ -43,6 +43,8 @@ jobs:
         run: node scripts/public-cache-smoke.mjs
       - name: Verify real Coordinator and regional DO RPC, replay and reconstruction
         run: node scripts/coordinator-smoke.mjs
+      - name: Verify SRE propagation and export with real Worker/Coordinator RPC
+        run: node scripts/telemetry-smoke.mjs
       - run: python3 -m unittest discover -s deploy -p 'test_*.py'
       - uses: actions/upload-artifact@v4
         with:
@@ -55,6 +57,10 @@ jobs:
     if: vars.UNIFIED_DEPLOY_APPROVED == '1'
     runs-on: ubuntu-latest
     env:
+      TELEMETRY_ENABLED: ${{ vars.TELEMETRY_ENABLED || '0' }}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      OTEL_TRACES_SAMPLER_ARG: ${{ vars.OTEL_TRACES_SAMPLER_ARG || '0.05' }}
+      CF_OTEL_TRACES_DESTINATION: ${{ vars.CF_OTEL_TRACES_DESTINATION }}
       WORKER_NAME: uptimeflare-distributed
       D1_DATABASE: uptimeflare-distributed-d1
       STATUS_DOMAIN: status.catxxp123.top

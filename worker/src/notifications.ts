@@ -1,3 +1,4 @@
+import { span } from './telemetry'
 import { getPublicNativeState } from './store'
 import { getMonitorStaleAfterSeconds } from '../../util/monitor-settings'
 import type { MonitorTarget, SingleWebhook, WorkerConfig } from '../../types/config'
@@ -325,15 +326,18 @@ export async function sendTemplateWebhook(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), webhook.timeout ?? 5000)
   try {
-    const response = await send(url.toString(), {
-      method: webhook.method ?? (webhook.payloadType === 'param' ? 'GET' : 'POST'),
-      headers,
-      body,
-      signal: controller.signal,
-      redirect: 'manual',
+    const response = await span('notification.send', async () => {
+      const response = await send(url.toString(), {
+        method: webhook.method ?? (webhook.payloadType === 'param' ? 'GET' : 'POST'),
+        headers,
+        body,
+        signal: controller.signal,
+        redirect: 'manual',
+      })
+      await response.body?.cancel()
+      if (!response.ok) throw new Error('Webhook delivery failed')
+      return response
     })
-    await response.body?.cancel()
-    if (!response.ok) throw new Error('Webhook delivery failed')
   } finally {
     clearTimeout(timer)
   }

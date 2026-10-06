@@ -87,3 +87,17 @@ class ProvisionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TelemetryProvisionTests(ProvisionTests):
+    def test_telemetry_is_opt_in_and_does_not_create_storage(self):
+        calls, config, error = self.run_prepare(overrides={'TELEMETRY_ENABLED':'1','OTEL_EXPORTER_OTLP_ENDPOINT':'https://collector.invalid/api/default','OTEL_TRACES_SAMPLER_ARG':'0.1','GITHUB_SHA':'fixture-sha','CF_OTEL_TRACES_DESTINATION':'fixture-traces'})
+        self.assertIsNone(error)
+        self.assertEqual(config['vars']['TELEMETRY_ENABLED'],'1')
+        self.assertEqual(config['vars']['OTEL_SERVICE_VERSION'],'fixture-sha')
+        self.assertNotIn('OTEL_EXPORTER_OTLP_HEADERS',config['vars'])
+        self.assertFalse(config['observability']['traces']['persist'])
+        self.assertEqual(config['observability']['traces']['destinations'],['fixture-traces'])
+        self.assertFalse(any('/observability/' in path for _,path,_ in calls))
+        _, disabled, _ = self.run_prepare(overrides={'CF_OTEL_TRACES_DESTINATION':'fixture-traces'})
+        self.assertNotIn('traces',disabled['observability'])

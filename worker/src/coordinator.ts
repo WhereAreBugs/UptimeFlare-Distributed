@@ -1,3 +1,4 @@
+import { invocation, observe } from './telemetry'
 import { withResources } from './resources'
 import { DurableObject } from 'cloudflare:workers'
 import pLimit from 'p-limit'
@@ -34,14 +35,39 @@ export class Coordinator extends DurableObject<Env> {
   async versions() {
     return { schema: 2, coordinator: 1, regional: 1, probe: 1 }
   }
-  private async serial<T>(work: (env: Env) => Promise<T>) {
+  private async serial<T>(
+    name: string,
+    parent: string | undefined,
+    work: (env: Env) => Promise<T>
+  ) {
     if (this.env.STATE_STORAGE_VERSION !== '2')
       throw new Error('Coordinator requires migrated schema2')
     if (this.queue.pendingCount >= 64) throw new Error('Coordinator queue full; retry the same run')
-    return this.queue(() => withResources(this.env, 'coordinator', work))
+    const start = performance.now()
+    return invocation(
+      this.env,
+      'coordinator.' + name,
+      () =>
+        this.queue(() => {
+          observe(
+            'worker.coordinator.queue.wait',
+            performance.now() - start,
+            { operation: name },
+            true
+          )
+          observe(
+            'worker.coordinator.queue.pending',
+            this.queue.pendingCount,
+            { operation: name },
+            true
+          )
+          return withResources(this.env, 'coordinator', work)
+        }),
+      { parent, waitUntil: (p) => this.ctx.waitUntil(p) }
+    )
   }
 
-  async commitProbe(request: ProbeCommitRequest) {
+  async commitProbe(request: ProbeCommitRequest, parent?: string) {
     if (
       request.version !== COORDINATOR_PROTOCOL ||
       !request.results?.length ||
@@ -49,7 +75,7 @@ export class Coordinator extends DurableObject<Env> {
       new TextEncoder().encode(JSON.stringify(request)).byteLength > 512 * 1024
     )
       throw new Error('Unsupported probe coordination request')
-    return this.serial(async (env) => {
+    return this.serial('commitProbe', parent, async (env) => {
       await persistPackedBatch(
         env,
         request.probeId,
@@ -62,11 +88,12 @@ export class Coordinator extends DurableObject<Env> {
     })
   }
   async commitNative(
-    request: NativeCommitRequest
+    request: NativeCommitRequest,
+    parent?: string
   ): Promise<{ version: number; committed: boolean; effects?: NativeEffect[] }> {
     if (request.version !== COORDINATOR_PROTOCOL || request.results.length > 200)
       throw new Error('Unsupported native coordination request')
-    return this.serial(async (env) => {
+    return this.serial('commitNative', parent, async (env) => {
       const config = await getRuntimeConfig(env, workerConfig)
       if (
         ((config as typeof config & { revision?: number }).revision ?? 0) !== request.configRevision
@@ -86,17 +113,17 @@ export class Coordinator extends DurableObject<Env> {
       .first()
     return { version: 1, runId, committed: !!receipt }
   }
-  async materialize(time: number) {
-    return this.serial(async (env) =>
+  async materialize(time: number, parent?: string) {
+    return this.serial('materialize', parent, async (env) =>
       publishPublicDashboard(env, await getRuntimeConfig(env, workerConfig), time)
     )
   }
-  async evaluate(now: number) {
-    return this.serial(async (env) =>
+  async evaluate(now: number, parent?: string) {
+    return this.serial('evaluate', parent, async (env) =>
       runNotifications(env, await getRuntimeConfig(env, workerConfig), now, undefined, false)
     )
   }
-  async cleanup(now: number) {
-    return this.serial((env) => cleanupPackedProbeResults(env, now))
+  async cleanup(now: number, parent?: string) {
+    return this.serial('cleanup', parent, (env) => cleanupPackedProbeResults(env, now))
   }
 }

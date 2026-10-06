@@ -1,3 +1,4 @@
+import { observe, span, telemetryEnabled, traceparent } from './telemetry'
 import type { Env } from './index'
 export type ResourceCounts = {
   sql: number
@@ -22,14 +23,14 @@ export function measureDatabase(database: D1Database, counts: ResourceCounts): D
         if (key === 'bind') return (...args: any[]) => wrap(target.bind(...args))
         if (key === 'first')
           return async (column?: string) => {
-            const r = await target.all()
+            const r = await span('d1.first', () => target.all())
             record(r)
             const row: any = r.results?.[0]
             return row ? (column === undefined ? row : row[column]) : null
           }
         if (key === 'all' || key === 'run')
           return async (...args: any[]) => {
-            const r = await (target as any)[key](...args)
+            const r = await span('d1.' + key, () => (target as any)[key](...args))
             record(r)
             return r
           }
@@ -45,7 +46,9 @@ export function measureDatabase(database: D1Database, counts: ResourceCounts): D
       if (key === 'prepare') return (sql: string) => wrap(target.prepare(sql))
       if (key === 'batch')
         return async (statements: D1PreparedStatement[]) => {
-          const r = await target.batch(statements.map((s) => underlying.get(s) ?? s))
+          const r = await span('d1.batch', () =>
+            target.batch(statements.map((s) => underlying.get(s) ?? s))
+          )
           r.forEach(record)
           return r
         }
@@ -70,7 +73,10 @@ function measureNamespace(namespace: any, counts: ResourceCounts) {
                 counts.doRequests++
                 const start = performance.now()
                 try {
-                  return await Reflect.apply(value, obj, params)
+                  return await span('rpc.' + String(method), async () => {
+                    const parent = traceparent()
+                    return Reflect.apply(value, obj, parent ? [...params, parent] : params)
+                  })
                 } finally {
                   counts.doDurationMs += performance.now() - start
                 }
@@ -90,7 +96,7 @@ export async function withResources<T>(
   scope: 'root-fetch' | 'root-cron' | 'coordinator',
   run: (env: Env) => Promise<T>
 ): Promise<T> {
-  if (env.METRICS_ENABLED !== '1') return run(env)
+  if (env.METRICS_ENABLED !== '1' && !telemetryEnabled(env)) return run(env)
   const counts: ResourceCounts = {
       sql: 0,
       rowsRead: 0,
@@ -103,6 +109,9 @@ export async function withResources<T>(
   const measured = {
     ...env,
     UPTIMEFLARE_D1: measureDatabase(env.UPTIMEFLARE_D1, counts),
+    ...(env.UPTIMEFLARE_PUBLIC_KV && {
+      UPTIMEFLARE_PUBLIC_KV: measureKV(env.UPTIMEFLARE_PUBLIC_KV),
+    }),
     ...(env.COORDINATOR_DO && { COORDINATOR_DO: measureNamespace(env.COORDINATOR_DO, counts) }),
     ...(env.REMOTE_CHECKER_DO && {
       REMOTE_CHECKER_DO: measureNamespace(env.REMOTE_CHECKER_DO, counts),
@@ -111,13 +120,36 @@ export async function withResources<T>(
   try {
     return await run(measured)
   } finally {
-    console.log(
-      JSON.stringify({
-        event: 'resource_counts',
-        scope,
-        ...counts,
-        wallDurationMs: performance.now() - start,
-      })
-    )
+    observe('worker.d1.queries', counts.sql, { scope })
+    observe('worker.d1.rows.read', counts.rowsRead, { scope })
+    observe('worker.d1.rows.written', counts.rowsWritten, { scope })
+    observe('worker.d1.rows.returned', counts.rowsReturned, { scope })
+    observe('worker.rpc.calls', counts.doRequests, { scope })
+    observe('worker.rpc.duration', counts.doDurationMs, { scope }, true)
+    if (env.METRICS_ENABLED === '1')
+      console.log(
+        JSON.stringify({
+          event: 'resource_counts',
+          scope,
+          ...counts,
+          wallDurationMs: performance.now() - start,
+        })
+      )
   }
+}
+
+function measureKV(namespace: KVNamespace): KVNamespace {
+  return new Proxy(namespace, {
+    get(target, key) {
+      const value = Reflect.get(target, key)
+      if (typeof value !== 'function') return value
+      return async (...args: any[]) => {
+        const operation = ['get', 'getWithMetadata', 'put', 'delete', 'list'].includes(String(key))
+          ? String(key)
+          : 'other'
+        observe('worker.kv.operations', 1, { operation })
+        return span('kv.' + operation, async () => Reflect.apply(value, target, args))
+      }
+    },
+  })
 }
