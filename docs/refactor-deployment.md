@@ -2,7 +2,7 @@
 
 2026-10-05，用户要求立即清理旧资源、先彻底切换新代码。本次已经删除旧 Worker、专属 DO、旧 Pages 全部 21 个部署、统一 Worker 的 9 个旧版本及全部可管理的项目备份。域名 `status.catxxp123.top` 仅由新统一 Worker `uptimeflare-distributed` 接管，源码 `33ed1be`（清理入口 `eef0b22`），state-v2。详见 [清理报告](refactor-cleanup.md)。不要重建旧资源、恢复 v1 或重新创建备份。
 
-生产迁移及两台 Go 升级已经完成。2026-10-06 的一次版本点查询和真实管理员登录、配置读写均已恢复；新 Cron 与 GitHub 部署门禁已开启。新样本、ACK、管理边界和手机交互已验证，OpenObserve 后端查询仍为 401，见生产报告最新章节。禁止自动升级付费、重复迁移、大导出或循环查询。
+生产迁移及两台 Go 升级已经完成。2026-10-06 的 D1、配置读写、新 Cron 与 GitHub 自动部署已恢复；新样本、ACK、管理边界和手机交互均已验证。两台已配置独立的 OpenObserve 写入令牌，后端检测、上传及运行指标的新数据验收通过；令牌查询返回 401 是预期权限限制。生产验收完成，原自动续作已停止，详见生产报告文末。禁止自动升级付费、重复迁移、大导出或循环查询。
 
 运行代码保持 `6930e0a` 的语义；后续提交为验收和文档。2026-10-06 已恢复每分钟 Cron，STATE_STORAGE_VERSION=2/PACKED_PROBE_COUNTERS=1/MIGRATION_MODE=0。短窗口计数通过活动版本设置开启后关闭，最终 METRICS_ENABLED=0；活动版本 ID 以私有生产续作记录与平台当前部署为准，不恢复已替代版本。两套服务端 CI 已通过；一项既有 5 秒测试超时在单次失败作业重跑后通过，部署验证中暂停显示元数据的旧断言已修正。
 
@@ -13,7 +13,7 @@ D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-
 - 工作区 `/Users/cat/Documents/ChatGPT/light-prober`，服务端子仓库 `UptimeFlare/`，Go 探针独立仓库。
 - GitHub：`WhereAreBugs/UptimeFlare-Distributed` 与 `WhereAreBugs/UptimeFlare-Distributed-prober`；CLI 在根 `bin/tools/gh`。
 - 活动 D1：`uptimeflare-distributed-d1`；公共 KV：`uptimeflare-distributed-public-status`；DO：新 Worker 的 `Coordinator` 和 `RemoteChecker`。保留当前数据与绑定。
-- 私有 `.deployment/cloudflare.json`、admin.json、probes.json、hosts.json、metadata.json、telemetry.json 和 probe-*.env 是当前凭据/配置，保留并禁止输出或提交。
+- 私有 `.deployment/cloudflare.json`、admin.json、probes.json、hosts.json、metadata.json、telemetry.json、telemetry-write-tokens.json 和 probe-*.env 是当前凭据/配置，保留并禁止输出或提交。telemetry.json 的通用 headers 不含鉴权；probe_headers 按探针保存独立写入鉴权，不能跨探针覆盖。
 - SSH：`root@45.192.249.191`、`root@45.207.35.75`。两台当前运行版本 `0f21ef2`，真实 queue.db/config.json 与遥测设置均保留。当前构建在 `bin/light-prober` 与 `bin/dashboard-*`。旧 `bin/refactor/` 已删除。
 - 用户 logo 尺寸改动已保留，后续不得覆盖。
 
@@ -21,9 +21,9 @@ D1 行数优化与相同失败合并均保留，参见 [D1 行数验收](d1-row-
 
 完整一致性快照、冻结旧写入入口、在途租约排空、严格语义迁移及完整比对均已执行：1340 个完整结果块、1820 个失败事件，共 3160 行。`storage_versions.version=2`，`migration_runs` 中 `state-v2` complete、lease_until=0。原配置、暂停状态、Token 和历史保留。全部迁移快照及回滚备份现已按用户要求删除；不要再重复 apply 或完整导出。
 
-## 剩余续作步骤
+## 历史续作步骤（已完成，不再执行）
 
-以下步骤保留原续作顺序。2026-10-06 已完成额度、配置、暂停同步、新样本/ACK、累计/合并失败、管理边界和手机交互验收，不再为这些已完成项重复全套查询或临时控制。Cron/门禁已恢复，不再重新开关。仅完成报告提交后的 CI/被替代版本清理，以及取得查询权限后的 OpenObserve 新指标验证；状态不变时保持安静。
+以下步骤仅保留历史续作顺序。2026-10-06 已完成额度、配置、暂停同步、新样本/ACK、累计/合并失败、管理边界、手机交互、CI、最终清理和 OpenObserve 新指标验收，不再重复全套查询或临时控制。Cron/门禁已恢复，不再重新开关。写入令牌无需查询权限，验收在 OpenObserve 主机内使用管理鉴权完成；后续无需保存额外查询凭据。
 
 1. 先做一次 `SELECT version FROM storage_versions WHERE id=1`。本次元数据查询成功但真实管理请求仍报告 `d1_read_quota`；因此该查询成功后还需一次真实管理员登录与配置读取，不能仅凭单行查询宣布恢复。任一步明确报当日读取额度耗尽时保持新 Cron 暂停、GitHub `CRON_ENABLED=0`/`UNIFIED_DEPLOY_APPROVED=0`，安静等待下一次；独立 Go 继续落盘。不能把所有 7500 误判为额度错误。
 2. 返回正常时确认 version=2，再核对 `migration_runs` 的 complete 和 lease_until=0。与记录冲突时调查，不重启旧生产者、不重新迁移。
