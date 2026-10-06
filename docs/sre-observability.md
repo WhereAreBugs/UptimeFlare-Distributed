@@ -19,6 +19,8 @@
 
 指标按 isolate 在内存聚合，最多 64 个 series；每次调用最多 64 个 span；每份未压缩请求不超过 64 KiB，gzip、5 秒超时、禁止跳转，导出通过 `waitUntil`。无定时器、重试风暴、D1/KV/DO 遥测存储或新增云端资源。活动 isolate 大约每分钟导出，Cron 结束强制导出；冷 isolate 被回收时尚未导出的指标可能丢失，因此不能将它们作为业务计费或严格配额账本。遥测失败不影响 ACK 或真实结果。
 
+当普通 fetch 上下文的出站路由与 DO/Cron 不一致时，可以设 `OTEL_EXPORTER_USE_COORDINATOR=1`，将根 fetch 的遥测批次通过既有 Coordinator 转发；没有新增对象或持久化。转发独立于提交队列，并发最多 2、等待最多 8，满载丢弃遥测，保持监控 ACK。额外开销是每个已采样调用一次 traces RPC，以及约每分钟一次 metrics RPC；`worker.telemetry.relay.calls` 可观测这些调用。生产当前启用此项：普通 Worker 直连既定写入地址返回 307，DO 从同地址能写入。导出明确识别 HTTP/OTLP 部分拒收，并最多每分钟记录一次不含响应正文的安全诊断。
+
 指标可以按 service、scope、operation、probe_id 筛选。追踪界面按 `trace_id` 查看调用树，`span_id`/`parent_span_id` 对应具体操作；不要将这些 ID 加为高基数指标标签。Go 的执行结果异步落盘，后续上传是独立 trace，原队列与 batch ID 未改变。
 
 ## 平台 CPU 与内存的边界

@@ -19,6 +19,7 @@ const mf = new Miniflare({
     STATE_STORAGE_VERSION: '2',
     PACKED_PROBE_COUNTERS: '1',
     TELEMETRY_ENABLED: '1',
+    OTEL_EXPORTER_USE_COORDINATOR: '1',
     OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.fixture/api/default',
     OTEL_EXPORTER_OTLP_HEADERS: '{}',
     OTEL_TRACES_SAMPLER_ARG: '1',

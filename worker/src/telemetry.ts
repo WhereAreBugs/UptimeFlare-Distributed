@@ -162,8 +162,24 @@ export async function span<T>(
       })
   }
 }
-async function send(env: Env, kind: 'metrics' | 'traces', body: unknown) {
+async function send(env: Env, kind: 'metrics' | 'traces', body: unknown, relay: boolean) {
   const text = JSON.stringify(body)
+  if (!relay) return sendDirectTelemetry(env, kind, text)
+  if (new TextEncoder().encode(text).byteLength > MAX_BYTES || !env.COORDINATOR_DO) return false
+  observe('worker.telemetry.relay.calls', 1, { signal: kind })
+  try {
+    // The RPC does no persistence or queueing. It avoids zone-specific outbound routing.
+    return await env.COORDINATOR_DO.get(env.COORDINATOR_DO.idFromName('state-v2')).exportTelemetry(
+      kind,
+      text
+    )
+  } catch {
+    return false
+  }
+}
+export async function sendDirectTelemetry(env: Env, kind: 'metrics' | 'traces', text: string) {
+  if (!enabled(env) || (kind !== 'metrics' && kind !== 'traces') || typeof text !== 'string')
+    return false
   if (new TextEncoder().encode(text).byteLength > MAX_BYTES) return false
   const rejected = (status: number, reason: string) => {
     const b = buffer(env),
@@ -249,18 +265,26 @@ function resource(env: Env) {
     }),
   }
 }
-export async function flush(env: Env, force = false, spans: any[] = []) {
+export async function flush(env: Env, force = false, spans: any[] = [], relay = false) {
   if (!enabled(env)) return
   const b = buffer(env),
     now = Date.now()
   const jobs: Promise<boolean>[] = []
   if (spans.length)
     jobs.push(
-      send(env, 'traces', {
-        resourceSpans: [
-          { resource: resource(env), scopeSpans: [{ scope: { name: 'uptimeflare.sre' }, spans }] },
-        ],
-      }).then((ok) => {
+      send(
+        env,
+        'traces',
+        {
+          resourceSpans: [
+            {
+              resource: resource(env),
+              scopeSpans: [{ scope: { name: 'uptimeflare.sre' }, spans }],
+            },
+          ],
+        },
+        relay
+      ).then((ok) => {
         if (!ok) b.failures++
         return ok
       })
@@ -334,14 +358,19 @@ export async function flush(env: Env, force = false, spans: any[] = []) {
     b.failures = 0
     b.dropped = 0
     jobs.push(
-      send(env, 'metrics', {
-        resourceMetrics: [
-          {
-            resource: resource(env),
-            scopeMetrics: [{ scope: { name: 'uptimeflare.sre' }, metrics }],
-          },
-        ],
-      }).then((ok) => {
+      send(
+        env,
+        'metrics',
+        {
+          resourceMetrics: [
+            {
+              resource: resource(env),
+              scopeMetrics: [{ scope: { name: 'uptimeflare.sre' }, metrics }],
+            },
+          ],
+        },
+        relay
+      ).then((ok) => {
         b.exporting = false
         if (!ok) b.failures++
         return ok
@@ -408,7 +437,14 @@ export async function invocation<T>(
         }),
         status: { code: failed || status >= 500 ? 2 : 1 },
       })
-    const exportTask = flush(env, options.force, store.spans)
+    const exportTask = context.run(store, () =>
+      flush(
+        env,
+        options.force,
+        store.spans,
+        scope === 'worker.fetch' && env.OTEL_EXPORTER_USE_COORDINATOR === '1'
+      )
+    )
     if (options.waitUntil) options.waitUntil(exportTask)
     else await exportTask
   }

@@ -91,9 +91,10 @@ if __name__ == '__main__':
 
 class TelemetryProvisionTests(ProvisionTests):
     def test_telemetry_is_opt_in_and_does_not_create_storage(self):
-        calls, config, error = self.run_prepare(overrides={'TELEMETRY_ENABLED':'1','OTEL_EXPORTER_OTLP_ENDPOINT':'https://collector.invalid/api/default','OTEL_TRACES_SAMPLER_ARG':'0.1','GITHUB_SHA':'fixture-sha','CF_OTEL_TRACES_DESTINATION':'fixture-traces'})
+        calls, config, error = self.run_prepare(overrides={'TELEMETRY_ENABLED':'1','OTEL_EXPORTER_USE_COORDINATOR':'1','OTEL_EXPORTER_OTLP_ENDPOINT':'https://collector.invalid/api/default','OTEL_TRACES_SAMPLER_ARG':'0.1','GITHUB_SHA':'fixture-sha','CF_OTEL_TRACES_DESTINATION':'fixture-traces'})
         self.assertIsNone(error)
         self.assertEqual(config['vars']['TELEMETRY_ENABLED'],'1')
+        self.assertEqual(config['vars']['OTEL_EXPORTER_USE_COORDINATOR'],'1')
         self.assertEqual(config['vars']['OTEL_SERVICE_VERSION'],'fixture-sha')
         self.assertNotIn('OTEL_EXPORTER_OTLP_HEADERS',config['vars'])
         self.assertFalse(config['observability']['traces']['persist'])

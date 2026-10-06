@@ -1,4 +1,4 @@
-import { invocation, observe } from './telemetry'
+import { invocation, observe, sendDirectTelemetry } from './telemetry'
 import { withResources } from './resources'
 import { DurableObject } from 'cloudflare:workers'
 import pLimit from 'p-limit'
@@ -29,9 +29,15 @@ export type NativeCommitRequest = {
   results: CheckResult[]
 }
 
-/** Stable object identity. Measurement never holds this queue; network delivery stays in the root. */
+/** Stable object identity. Measurement never holds the commit queue. */
 export class Coordinator extends DurableObject<Env> {
   private queue = pLimit(1)
+  private telemetryQueue = pLimit(2)
+  async exportTelemetry(kind: 'metrics' | 'traces', body: string) {
+    if (this.telemetryQueue.pendingCount >= 8) return false
+    // Separate, bounded, best-effort network delivery; no D1, KV or DO storage.
+    return this.telemetryQueue(() => sendDirectTelemetry(this.env, kind, body))
+  }
   async versions() {
     return { schema: 2, coordinator: 1, regional: 1, probe: 1 }
   }
