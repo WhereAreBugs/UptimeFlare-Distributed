@@ -10,7 +10,7 @@ const loader = createPublicHistoryLoader(async (id, signal) => {
   try {
     const response = await fetch(`/api/history?id=${encodeURIComponent(id)}`, {
       credentials: 'same-origin',
-      cache: 'no-store',
+      cache: 'default',
       signal: controller.signal,
     })
     if (!response.ok) throw new Error('History is temporarily unavailable')

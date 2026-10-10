@@ -16,7 +16,7 @@ DATABASE_ID = '00000000-1111-2222-3333-444444444444'
 
 
 class ProvisionTests(unittest.TestCase):
-    def run_prepare(self, *, fresh=False, version=2, overrides=None):
+    def run_prepare(self, *, fresh=False, version=2, overrides=None, routing=None):
         calls = []
 
         def response(request, **unused):
@@ -43,6 +43,10 @@ class ProvisionTests(unittest.TestCase):
                 os.chdir(directory)
                 Path('worker').mkdir()
                 Path('init.sql').write_text(SCHEMA)
+                Path('uptime.config.ts').write_text('fixture')
+                if routing is not None:
+                    Path('out').mkdir()
+                    Path('out/_worker-routing.json').write_text(json.dumps(routing))
                 with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', ['provision.py', 'prepare']), patch('urllib.request.urlopen', response), patch('sys.stdout', io.StringIO()):
                     try:
                         runpy.run_path(str(ROOT / 'deploy/provision.py'), run_name='__main__')
@@ -83,6 +87,16 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(queries, ['SELECT version FROM storage_versions WHERE id=1'])
         self.assertEqual(config['triggers']['crons'], [])
         self.assertEqual(config['vars']['STATE_STORAGE_VERSION'], '2')
+
+    def test_static_assets_bypass_worker_only_for_verified_public_builds(self):
+        source_hash = hashlib.sha256(b'fixture').hexdigest()
+        _, config, error = self.run_prepare(routing={'sourceHash': source_hash, 'protected': False})
+        self.assertIsNone(error)
+        self.assertEqual(config['assets']['run_worker_first'], ['/api/*'])
+        for metadata in [None, {}, {'sourceHash': 'wrong', 'protected': False}, {'sourceHash': source_hash, 'protected': True}]:
+            _, config, error = self.run_prepare(routing=metadata)
+            self.assertIsNone(error)
+            self.assertIs(config['assets']['run_worker_first'], True)
 
 
 if __name__ == '__main__':

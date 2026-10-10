@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { writeAssetRouting } from './asset-routing.mjs'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+await writeAssetRouting(root)
 const result = spawnSync(
   process.execPath,
   [

@@ -1,7 +1,11 @@
 import type { MaintenanceConfig, PageConfig } from './config'
 import type { ProbeMonitorSummary } from './probes'
 
-export const PUBLIC_SNAPSHOT_MAX_AGE_SECONDS = 180
+// Publication is every five minutes, with a ten-minute heartbeat when unchanged.
+// Probe sample expiry remains independently bounded by twice its target interval.
+export const PUBLIC_SNAPSHOT_MAX_AGE_SECONDS = 900
+export const PUBLIC_CLIENT_REFRESH_SECONDS = 120
+export const PUBLIC_EDGE_CACHE_SECONDS = 60
 
 /** Public wire contract. Keep independent of the private check configuration. */
 export type PublicMonitor = {

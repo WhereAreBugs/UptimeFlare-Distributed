@@ -87,7 +87,7 @@ const options = {
     return new Response('OK')
   },
 }
-const now = Math.floor(Date.now() / 120000) * 120
+const now = Math.floor(Date.now() / 300000) * 300
 const monitors = Array.from({ length: 10 }, (_, i) => ({
   id: 't' + i,
   name: 'Target ' + i,
@@ -183,7 +183,9 @@ try {
   assert.equal(
     (
       await restored
-        .prepare("SELECT json_extract(value,'$.monitors.t0.checks') checks FROM uptimeflare WHERE key=?")
+        .prepare(
+          "SELECT json_extract(value,'$.monitors.t0.checks') checks FROM uptimeflare WHERE key=?"
+        )
         .bind('probe-counters:v1:a')
         .first()
     ).checks,

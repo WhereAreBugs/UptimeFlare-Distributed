@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, afterAll, expect, it } from 'vitest'
+import { beforeAll, beforeEach, afterAll, expect, it, vi } from 'vitest'
 import { Miniflare } from 'miniflare'
 import { readFileSync } from 'node:fs'
 import type { MonitorTarget, WorkerConfig } from '../../types/config'
@@ -44,6 +44,7 @@ beforeAll(async () => {
     await env.UPTIMEFLARE_D1.prepare(sql).run()
 }, 30000)
 beforeEach(async () => {
+  vi.unstubAllGlobals()
   await env.UPTIMEFLARE_D1.batch(
     [
       'probe_latest',
@@ -58,7 +59,52 @@ beforeEach(async () => {
   )
 })
 afterAll(async () => {
+  vi.unstubAllGlobals()
   await mf?.dispose()
+})
+it('coalesces concurrent public history reads, caches only successes and checks pause/range before serving a cached result', async () => {
+  await seed()
+  const saved = new Map<string, Response>()
+  vi.stubGlobal('caches', {
+    default: {
+      match: async (key: string) => saved.get(key)?.clone(),
+      put: async (key: string, value: Response) => {
+        saved.set(key, value.clone())
+      },
+    },
+  })
+  const trace = traced()
+  const request = () => new Request('https://status.test/api/history?id=target-0')
+  const responses = await Promise.all(
+    Array.from({ length: 10 }, () => handlePublicHistoryRequest(request(), trace.env, config))
+  )
+  expect(responses.every((response) => response.status === 200)).toBe(true)
+  expect(responses[0].headers.get('Cache-Control')).toBe('private,max-age=30')
+  const count = trace.queries.length
+  expect(count).toBeGreaterThan(0)
+  expect(saved.size).toBe(1)
+  expect(Array.from(saved.values())[0].headers.get('Cache-Control')).toBe('public,max-age=60')
+  await handlePublicHistoryRequest(request(), trace.env, config)
+  expect(trace.queries).toHaveLength(count)
+  const paused = { ...config, monitors: [{ ...targets[0], paused: true }] }
+  expect((await handlePublicHistoryRequest(request(), trace.env, paused)).status).toBe(404)
+  expect(
+    (
+      await handlePublicHistoryRequest(
+        new Request('https://status.test/api/history?id=target-0&from=0'),
+        trace.env,
+        config
+      )
+    ).status
+  ).toBe(400)
+  expect(trace.queries).toHaveLength(count)
+  await handlePublicHistoryRequest(
+    new Request(`https://status.test/api/history?id=target-0&from=${NOW - 300}&to=${NOW}`),
+    trace.env,
+    config
+  )
+  expect(trace.queries.length).toBeGreaterThan(count)
+  expect(saved.size).toBe(2)
 })
 function traced() {
   const queries: string[] = []

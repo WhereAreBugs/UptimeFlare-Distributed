@@ -95,6 +95,37 @@ afterAll(async () => {
   vi.unstubAllGlobals()
   await mf?.dispose()
 })
+it('skips unchanged snapshots until the ten-minute heartbeat and retries a failed KV put without losing the previous snapshot', async () => {
+  const start = Math.floor(NOW / 300) * 300
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(start * 1000)
+  try {
+    expect(await publishPublicDashboard(env, config, start)).toBe(true)
+    const original = await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)
+    clock.mockReturnValue((start + 300) * 1000)
+    expect(await publishPublicDashboard(env, config, start + 300)).toBe(false)
+    expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)).toBe(original)
+    clock.mockReturnValue((start + 600) * 1000)
+    const failing = {
+      ...env,
+      UPTIMEFLARE_PUBLIC_KV: {
+        put: async () => {
+          throw new Error('unavailable')
+        },
+      } as unknown as KVNamespace,
+    }
+    await expect(publishPublicDashboard(failing, config, start + 600)).rejects.toThrow(
+      'unavailable'
+    )
+    expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)).toBe(original)
+    clock.mockReturnValue((start + 660) * 1000)
+    expect(await publishPublicDashboard(env, config, start + 660, 'event')).toBe(true)
+    expect(
+      JSON.parse((await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY))!).generatedAt
+    ).toBe(start + 660)
+  } finally {
+    clock.mockRestore()
+  }
+})
 async function seed(
   snapshot: PublicDashboardSnapshot = buildPublicDashboard(config, NOW, true, summaries)
 ) {
@@ -128,13 +159,45 @@ it('serves the public snapshot without any D1 read, strips secrets/history, and 
 })
 it('allows a last-known snapshot during D1 exhaustion but never presents stale successes as green', async () => {
   await seed()
-  const dashboard = await getPublicDashboard(blockedD1(), config, NOW + 181)
+  const dashboard = await getPublicDashboard(blockedD1(), config, NOW + 901)
   expect(dashboard.stale).toBe(true)
   expect(dashboard.snapshotAt).toBe(NOW)
   expect(dashboard.probeSummaries.host.status).toBe('unknown')
   expect(dashboard.probeSummaries.host.probes[0].latest).toBe(NOW)
   expect(dashboard.probeSummaries.host.probes[0].status).toBe('unknown')
   expect(dashboard.compactedStateStr).toBeNull()
+})
+it('five-minute publication does not expire the pipeline at three minutes, while probe silence still expires at twice the target interval', async () => {
+  await seed()
+  const fresh = await getPublicDashboard(blockedD1(), config, NOW + 360)
+  expect(fresh.stale).toBe(false)
+  expect(fresh.probeSummaries.host.status).toBe('up')
+  const silent = await getPublicDashboard(blockedD1(), config, NOW + 601)
+  expect(silent.stale).toBe(false)
+  expect(silent.probeSummaries.host.status).toBe('unknown')
+})
+it('coalesces a burst of cold-cache requests into one two-key KV read', async () => {
+  await seed()
+  let reads = 0
+  const kv = new Proxy(env.UPTIMEFLARE_PUBLIC_KV!, {
+    get(target, key) {
+      if (key === 'get')
+        return async (...args: any[]) => {
+          reads++
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          return (target.get as any)(...args)
+        }
+      const value = Reflect.get(target, key)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  const dashboards = await Promise.all(
+    Array.from({ length: 16 }, () =>
+      getPublicDashboard({ ...blockedD1(), UPTIMEFLARE_PUBLIC_KV: kv }, config, NOW)
+    )
+  )
+  expect(reads).toBe(2)
+  expect(dashboards.every((value) => value.probeSummaries.host.status === 'up')).toBe(true)
 })
 it('supports metadata-only recovery snapshots with every active target unknown and closed targets preserved', async () => {
   await seed(buildPublicDashboard(config, NOW))
@@ -195,7 +258,7 @@ it('minute consumption cache avoids repeating KV reads but freshness is recalcul
   })
   const scoped = { ...blockedD1(), UPTIMEFLARE_PUBLIC_KV: kv }
   expect((await getPublicDashboard(scoped, config, NOW)).stale).toBe(false)
-  expect((await getPublicDashboard(scoped, config, NOW + 181)).stale).toBe(true)
+  expect((await getPublicDashboard(scoped, config, NOW + 901)).stale).toBe(true)
   expect(reads).toBe(2)
   expect(stored!.headers.get('Cache-Control')).toBe('public, max-age=60')
 })
@@ -253,8 +316,8 @@ it('only a successful configuration CAS publishes a safe override; conflicts pub
   expect(await saveConfiguration(env, config, 14, changed.monitors)).toBe(false)
   expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_CONFIGURATION_KEY)).toBe(serialized)
 })
-it('publishes only even-minute Cron slots and idempotently rejects duplicate delivery', async () => {
-  const even = Math.floor(NOW / 120) * 120
+it('publishes only five-minute Cron slots and idempotently rejects duplicate delivery', async () => {
+  const even = Math.floor(NOW / 300) * 300
   expect(await publishPublicDashboard(env, config, even + 60)).toBe(false)
   expect(await publishPublicDashboard(env, config, even)).toBe(true)
   expect(await publishPublicDashboard(env, config, even)).toBe(false)
@@ -262,11 +325,21 @@ it('publishes only even-minute Cron slots and idempotently rejects duplicate del
   expect(snapshot.complete).toBe(true)
   expect(snapshot.monitors).toHaveLength(2)
 })
+it('publishes two-minute slots for active fast targets and keeps their independent two-interval expiry', async () => {
+  const time = Math.floor(NOW / 600) * 600 + 120
+  const fast = { ...config, monitors: [{ ...target, intervalSeconds: 60 }] }
+  expect(await publishPublicDashboard(env, fast, time)).toBe(true)
+  const snapshot = buildPublicDashboard(fast, NOW, true, summaries)
+  await seed(snapshot)
+  const after = await getPublicDashboard(blockedD1(), fast, NOW + 121)
+  expect(after.stale).toBe(false)
+  expect(after.probeSummaries.host.status).toBe('unknown')
+})
 it('a failed Cron D1 refresh leaves the previous persisted snapshot intact', async () => {
   await seed()
   const previous = await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)
   await expect(
-    publishPublicDashboard(blockedD1(), config, Math.floor(NOW / 120) * 120)
+    publishPublicDashboard(blockedD1(), config, Math.floor(NOW / 300) * 300)
   ).rejects.toThrow('D1 daily')
   expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY)).toBe(previous)
 })
@@ -293,7 +366,7 @@ it('projects native latest state only and removes error details, deleted targets
   ])
   await seed(snapshot)
   expect(
-    (await getPublicDashboard(blockedD1(), nativeConfig, NOW + 181)).compactedStateStr
+    (await getPublicDashboard(blockedD1(), nativeConfig, NOW + 901)).compactedStateStr
   ).toBeNull()
 })
 it('uses the static public metadata recovery only for an explicit D1 read quota failure, with accurate closed targets', async () => {
@@ -463,7 +536,7 @@ it('serializes configuration publishers across distinct isolates, then catches u
     JSON.parse((await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_CONFIGURATION_KEY))!).configRevision
   ).toBe(15)
   // The skipped configuration is not lost: the next normal producer uses the current revision.
-  await publishPublicDashboard(env, { ...latest, revision: 16 }, Math.floor(NOW / 120) * 120)
+  await publishPublicDashboard(env, { ...latest, revision: 16 }, Math.floor(NOW / 300) * 300)
   const dashboard = await getPublicDashboard(scoped, config, NOW)
   expect(dashboard.configRevision).toBe(16)
   expect(dashboard.monitors.every((m) => m.paused)).toBe(true)
@@ -482,7 +555,7 @@ it('a crashed immediate publisher cannot block current Cron snapshots or cause a
   }
   await publishPublicConfiguration(env, latest, 16)
   expect(await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_CONFIGURATION_KEY)).toBeNull()
-  await publishPublicDashboard(env, latest, Math.floor(NOW / 120) * 120)
+  await publishPublicDashboard(env, latest, Math.floor(NOW / 300) * 300)
   const dashboard = await getPublicDashboard(blockedD1(), config, NOW)
   expect(dashboard.configRevision).toBe(16)
   expect(dashboard.monitors.every((m) => m.paused)).toBe(true)
@@ -530,7 +603,7 @@ it('degrades oversized public metadata without blocking state, releases publishe
       tooltip: 'x'.repeat(4096),
     })),
   }
-  await publishPublicDashboard(env, large, Math.floor(NOW / 120) * 120)
+  await publishPublicDashboard(env, large, Math.floor(NOW / 300) * 300)
   const value = (await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY))!
   expect(new TextEncoder().encode(value).byteLength).toBeLessThanOrEqual(256 * 1024)
   expect(sanitizePublicSnapshot(JSON.parse(value)).monitors).toHaveLength(100)
@@ -565,7 +638,7 @@ it('keeps500 targets and1650 multi-probe assignments within the UTF8 public budg
     })),
     page: { title: 'Status', group: {} },
   }
-  await publishPublicDashboard(env, large, Math.floor(NOW / 120) * 120 + 120)
+  await publishPublicDashboard(env, large, Math.floor(NOW / 300) * 300 + 300)
   const raw = (await env.UPTIMEFLARE_PUBLIC_KV!.get(PUBLIC_DASHBOARD_KEY))!
   expect(new TextEncoder().encode(raw).byteLength).toBeLessThanOrEqual(256 * 1024)
   const snapshot = sanitizePublicSnapshot(JSON.parse(raw))

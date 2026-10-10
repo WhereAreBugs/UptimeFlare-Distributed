@@ -81,7 +81,7 @@ const fixtureSnapshot = (complete = false) => {
   const now = Math.floor(Date.now() / 1000)
   return {
     version: 1,
-    generatedAt: now - (complete ? 240 : 0),
+    generatedAt: now - (complete ? 960 : 0),
     configRevision: 14,
     complete,
     monitors,
@@ -341,6 +341,63 @@ async function authChecks(mf) {
   )
 }
 
+async function assetRoutingChecks() {
+  const fixture = `import worker from './index.js';
+let calls=0;
+export default {fetch(request,env,ctx){calls++;if(new URL(request.url).pathname==='/api/_fixture/asset-calls')return Response.json({calls});return worker.fetch(request,env,ctx)}};
+export {Coordinator,RemoteChecker} from './index.js';`
+  const native = new Miniflare({
+    modules: [
+      {
+        type: 'ESModule',
+        path: join(dirname(artifact), '__assets_fixture.mjs'),
+        contents: fixture,
+      },
+      ...modules,
+    ],
+    modulesRoot: dirname(artifact),
+    compatibilityDate: '2025-04-02',
+    compatibilityFlags: ['nodejs_compat'],
+    assets: {
+      directory: staticRoot,
+      binding: 'ASSETS',
+      routerConfig: { has_user_worker: true, static_routing: { user_worker: ['/api/*'] } },
+    },
+    bindings: {
+      ADMIN_PASSWORD: secrets[1],
+      ADMIN_SESSION_SECRET: secrets[2],
+      PROBE_TOKENS: JSON.stringify({ 'fixture-p1': secrets[3] }),
+    },
+  })
+  try {
+    const html = await native.dispatchFetch(origin + '/')
+    check(html.status === 200, 'Public HTML must be served directly by Assets')
+    const source = await html.text()
+    const resource = /src="([^\"]+\/_next\/[^\"]+|\/_next\/[^\"]+)"/.exec(source)?.[1]
+    check(!!resource, 'Expected a real generated Next static asset')
+    check(
+      (await native.dispatchFetch(origin + resource)).status === 200,
+      'Hashed JS must be served directly by Assets'
+    )
+    const calls = await native.dispatchFetch(origin + '/api/_fixture/asset-calls')
+    check(
+      (await calls.json()).calls === 1,
+      'HTML/JS must bypass Worker invocation entirely; only the API invokes it'
+    )
+    check(
+      (await native.dispatchFetch(origin + '/api/admin/config')).status === 401,
+      'Selective routing must retain real API authentication'
+    )
+    reports.push({
+      scenario: 'native-static-routing',
+      staticWorkerInvocations: 0,
+      protectedApiStatus: 401,
+    })
+  } finally {
+    await native.dispose()
+  }
+}
+
 let mf, gateway
 const browserRequests = { total: 0, history: 0 }
 try {
@@ -355,6 +412,7 @@ try {
   await authChecks(mf)
   await mf.dispose()
   mf = undefined
+  await assetRoutingChecks()
   console.log(
     JSON.stringify(
       {

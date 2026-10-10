@@ -1,6 +1,7 @@
 import { decodePublicWire } from '@/util/public-wire'
 import { useEffect, useState } from 'react'
 import type { PublicDashboard } from '@/types/public-dashboard'
+import { PUBLIC_CLIENT_REFRESH_SECONDS } from '@/types/public-dashboard'
 
 /** One cancellable summary request, bounded exponential retry and no hidden-tab polling. */
 export function usePublicDashboard() {
@@ -16,9 +17,9 @@ export function usePublicDashboard() {
       controller = new AbortController()
       const current = controller
       const deadline = setTimeout(() => current.abort(), 10000)
-      let delay = 60000
+      let delay = PUBLIC_CLIENT_REFRESH_SECONDS * 1000
       try {
-        const response = await fetch('/api/state', { signal: current.signal, cache: 'no-store' })
+        const response = await fetch('/api/state', { signal: current.signal, cache: 'default' })
         if (!response.ok) throw new Error('State unavailable')
         const raw: any = await response.json()
         const value = {
@@ -32,6 +33,8 @@ export function usePublicDashboard() {
             cachedAt: raw.cachedAt,
           },
         } as PublicDashboard
+        if (value.monitors.some((monitor) => !monitor.paused && monitor.intervalSeconds < 300))
+          delay = 60000
         if (!stopped && !current.signal.aborted) {
           setDashboard(value)
           setError(false)

@@ -41,7 +41,7 @@ export function measureDatabase(database: D1Database, counts: ResourceCounts): D
     underlying.set(result, statement)
     return result
   }
-  return new Proxy(database, {
+  const wrapper = new Proxy(database, {
     get(target, key) {
       if (key === 'prepare') return (sql: string) => wrap(target.prepare(sql))
       if (key === 'batch')
@@ -56,7 +56,11 @@ export function measureDatabase(database: D1Database, counts: ResourceCounts): D
       return typeof value === 'function' ? value.bind(target) : value
     },
   })
+  identities.set(wrapper, resourceIdentity(database))
+  return wrapper
 }
+const identities = new WeakMap<object, object>()
+export const resourceIdentity = (value: object) => identities.get(value) ?? value
 const namespaces = new WeakMap<object, object>()
 export const namespaceIdentity = (value: object) => namespaces.get(value) ?? value
 function measureNamespace(namespace: any, counts: ResourceCounts) {
@@ -139,7 +143,7 @@ export async function withResources<T>(
 }
 
 function measureKV(namespace: KVNamespace): KVNamespace {
-  return new Proxy(namespace, {
+  const wrapper = new Proxy(namespace, {
     get(target, key) {
       const value = Reflect.get(target, key)
       if (typeof value !== 'function') return value
@@ -152,4 +156,6 @@ function measureKV(namespace: KVNamespace): KVNamespace {
       }
     },
   })
+  identities.set(wrapper, resourceIdentity(namespace))
+  return wrapper
 }

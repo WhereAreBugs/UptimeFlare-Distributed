@@ -2,9 +2,11 @@ import type { WorkerConfig } from '../../types/config'
 import type { ProbeEnv } from './probes'
 import { getProbeSummaries } from './probes'
 import { getPublicNativeState } from './store'
-import { getPublicDashboard, publicMonitors } from './public-dashboard'
+import { getPublicDashboard, publicMonitors, CACHE_URL } from './public-dashboard'
+import { resourceIdentity } from './resources'
 import { getRuntimeConfig } from './settings'
 import { workerConfig } from '../../uptime.config'
+const inFlight = new WeakMap<object, Map<string, Promise<Response>>>()
 
 function json(value: unknown, status = 200, extra: Record<string, string> = {}) {
   const body = JSON.stringify(value)
@@ -58,8 +60,10 @@ export async function handlePublicHistoryRequest(
       probes: runtime.probes?.map(({ id, name, location }) => ({ id, name, location })),
     }
   }
+  let revision = (config as (WorkerConfig & { revision?: number }) | undefined)?.revision ?? 0
   if (!config) {
     const dashboard = await getPublicDashboard(env, workerConfig)
+    revision = dashboard.configRevision
     config = {
       monitors: dashboard.monitors,
       probes: Array.from(
@@ -79,17 +83,71 @@ export async function handlePublicHistoryRequest(
   }
   const monitor = config.monitors.find((target) => target.id === id && !target.paused)
   if (!monitor) return json({ error: 'Monitor not found' }, 404)
-  try {
-    if (monitor.probes?.length) {
-      const summaries = await getProbeSummaries(env, [monitor], config.probes, now, { from, to })
-      return json({ monitorId: id, summary: summaries[id] })
-    }
-    return json({
-      monitorId: id,
-      compactedStateStr: await getPublicNativeState(env, [monitor], true, from, to),
-      historyLoaded: true,
+  const definitions = config.probes
+  // Validate current lifecycle BEFORE using a shared cached history. Admin and
+  // bearer-token responses never enter this public cache.
+  const key = new URL(CACHE_URL + '/history-v1')
+  key.searchParams.set('id', id)
+  key.searchParams.set('revision', String(revision))
+  key.searchParams.set('probes', (monitor.probes ?? []).join(','))
+  key.searchParams.set('from', String(url.searchParams.has('from') ? from : Math.floor(now / 60)))
+  key.searchParams.set('to', String(url.searchParams.has('to') ? to : Math.floor(now / 60)))
+  const cache = (globalThis as any).caches?.default as Cache | undefined
+  const client = (response: Response) =>
+    new Response(response.body, {
+      status: response.status,
+      headers: {
+        ...Object.fromEntries(response.headers),
+        'cache-control': response.ok ? 'private,max-age=30' : 'no-store',
+        vary: 'Authorization',
+      },
     })
-  } catch {
-    return json({ error: 'History is temporarily unavailable' }, 503)
+  const saved = await cache?.match(key.toString()).catch(() => undefined)
+  if (saved) return client(saved)
+  const identity = resourceIdentity(env.UPTIMEFLARE_D1)
+  let requests = inFlight.get(identity)
+  if (!requests) {
+    requests = new Map()
+    inFlight.set(identity, requests)
+  }
+  let pending = requests.get(key.toString())
+  if (pending) return client((await pending).clone())
+  if (requests.size >= 16)
+    return json({ error: 'History is temporarily busy' }, 503, { 'Retry-After': '5' })
+  const load = async () => {
+    try {
+      if (monitor.probes?.length) {
+        const summaries = await getProbeSummaries(env, [monitor], definitions, now, { from, to })
+        return json({ monitorId: id, summary: summaries[id] })
+      }
+      return json({
+        monitorId: id,
+        compactedStateStr: await getPublicNativeState(env, [monitor], true, from, to),
+        historyLoaded: true,
+      })
+    } catch {
+      return json({ error: 'History is temporarily unavailable' }, 503)
+    }
+  }
+  pending = load().then(async (response) => {
+    if (response.ok)
+      await cache
+        ?.put(
+          key.toString(),
+          new Response(response.clone().body, {
+            headers: {
+              ...Object.fromEntries(response.headers),
+              'cache-control': 'public,max-age=60',
+            },
+          })
+        )
+        .catch(() => undefined)
+    return response
+  })
+  requests.set(key.toString(), pending)
+  try {
+    return client((await pending).clone())
+  } finally {
+    requests.delete(key.toString())
   }
 }

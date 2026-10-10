@@ -2,7 +2,7 @@ import { invocation } from './telemetry'
 import { withResources } from './resources'
 export { Coordinator } from './coordinator'
 import type { Coordinator } from './coordinator'
-import { deliverNotifications } from './notifications'
+import { deliverNotifications, effectiveNotificationConfig } from './notifications'
 import { createExecutionBudget } from './execution-budget'
 import { pageAccess } from './access'
 import { RegionalExecutor, type RegionalRequest } from './regional'
@@ -26,6 +26,7 @@ import { runNotifications } from './notifications'
 import { handleManagementRequest } from './management'
 import { handlePublicHistoryRequest } from './history'
 import { publishPublicDashboard } from './public-dashboard'
+import { isPublicationSlot } from './public-publication'
 
 export interface Env {
   PACKED_PROBE_COUNTERS?: string
@@ -97,25 +98,28 @@ const implementation = {
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (env.MIGRATION_MODE === '1') return
-    ctx.waitUntil(
-      cleanupProbeResults(env).catch(() => console.error('Probe retention cleanup failed'))
-    )
-    const workerConfig = await getRuntimeConfig(env, fallbackConfig)
-    ctx.waitUntil(
-      env.UPTIMEFLARE_D1.prepare(
-        'DELETE FROM admin_login_attempts WHERE address IN (SELECT address FROM admin_login_attempts WHERE window < ? LIMIT 1000)'
-      )
-        .bind(Math.floor(Date.now() / 1000 / 900) - 2)
-        .run()
-        .catch(() => console.error('Admin login cleanup failed'))
-    )
     const time = Math.floor(event.scheduledTime / 60000) * 60
+    // Retention is already hourly-fenced in D1. Avoid 1,416 no-op RPCs/claims per day.
+    if (time % 3600 === 0)
+      ctx.waitUntil(
+        cleanupProbeResults(env).catch(() => console.error('Probe retention cleanup failed'))
+      )
+    const workerConfig = await getRuntimeConfig(env, fallbackConfig)
+    if (time % 900 === 0)
+      ctx.waitUntil(
+        env.UPTIMEFLARE_D1.prepare(
+          'DELETE FROM admin_login_attempts WHERE address IN (SELECT address FROM admin_login_attempts WHERE window < ? LIMIT 1000)'
+        )
+          .bind(Math.floor(Date.now() / 1000 / 900) - 2)
+          .run()
+          .catch(() => console.error('Admin login cleanup failed'))
+      )
     let location: Promise<string> | undefined
     const getLocation = () =>
       (location ??= getWorkerLocation()
         .catch(() => undefined)
         .then((value) => value || 'UNKNOWN'))
-    await cleanupMonitorSchedules(env, workerConfig.monitors)
+    if (isPublicationSlot(time)) await cleanupMonitorSchedules(env, workerConfig.monitors)
     const active = workerConfig.monitors.filter((monitor) => !monitor.paused)
     const cloudflareCount = active.filter(
       (monitor) => monitor.probes?.includes('cloudflare')
@@ -142,9 +146,13 @@ const implementation = {
     await runNativeMonitors(env, workerConfig, time, getLocation, undefined, budget)
     if (env.STATE_STORAGE_VERSION === '2' && env.COORDINATOR_DO) {
       const coordinator = env.COORDINATOR_DO.get(env.COORDINATOR_DO.idFromName('state-v2'))
-      await coordinator.evaluate(Math.floor(Date.now() / 1000))
-      await deliverNotifications(env, workerConfig, Math.floor(Date.now() / 1000))
-      await coordinator.materialize(time)
+      const notifications =
+        effectiveNotificationConfig(workerConfig).config.notificationTemplates?.length
+      if (notifications || time % 900 === 0) {
+        await coordinator.evaluate(Math.floor(Date.now() / 1000))
+        await deliverNotifications(env, workerConfig, Math.floor(Date.now() / 1000))
+      }
+      if (isPublicationSlot(time, workerConfig)) await coordinator.materialize(time)
     } else {
       await runNotifications(env, workerConfig, Math.floor(Date.now() / 1000)).catch(() =>
         console.error('Notification evaluation failed')

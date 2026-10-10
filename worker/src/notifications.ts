@@ -514,7 +514,8 @@ export async function runNotifications(
   config: WorkerConfig,
   now: number,
   send: typeof fetch = fetch,
-  deliver = true
+  deliver = true,
+  maintenance = true
 ) {
   const snapshot = await withSavedPauseFlags(env, config.monitors)
   config = { ...config, monitors: snapshot.monitors }
@@ -567,17 +568,19 @@ export async function runNotifications(
     (monitor) => !monitor.paused && templateIds.has(monitor.notificationTemplateId ?? '')
   )
   const activeIds = JSON.stringify(monitors.map((monitor) => monitor.id))
-  const cleanup = await env.UPTIMEFLARE_D1.batch([
-    env.UPTIMEFLARE_D1.prepare(
-      `DELETE FROM notification_observations WHERE monitor_id IN (SELECT monitor_id FROM notification_observations WHERE monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000) AND (${snapshot.guard})`
-    ).bind(JSON.stringify(config.monitors.map((monitor) => monitor.id))),
-    env.UPTIMEFLARE_D1.prepare(
-      `DELETE FROM notification_state WHERE monitor_id IN (SELECT monitor_id FROM notification_state WHERE monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000) AND (${snapshot.guard})`
-    ).bind(activeIds),
-    env.UPTIMEFLARE_D1.prepare(
-      `DELETE FROM notification_outbox WHERE event_id IN (SELECT event_id FROM notification_outbox WHERE monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000) AND (${snapshot.guard})`
-    ).bind(activeIds),
-  ])
+  const cleanup = maintenance
+    ? await env.UPTIMEFLARE_D1.batch([
+        env.UPTIMEFLARE_D1.prepare(
+          `DELETE FROM notification_observations WHERE monitor_id IN (SELECT monitor_id FROM notification_observations WHERE monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000) AND (${snapshot.guard})`
+        ).bind(JSON.stringify(config.monitors.map((monitor) => monitor.id))),
+        env.UPTIMEFLARE_D1.prepare(
+          `DELETE FROM notification_state WHERE monitor_id IN (SELECT monitor_id FROM notification_state WHERE monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000) AND (${snapshot.guard})`
+        ).bind(activeIds),
+        env.UPTIMEFLARE_D1.prepare(
+          `DELETE FROM notification_outbox WHERE event_id IN (SELECT event_id FROM notification_outbox WHERE monitor_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1000) AND (${snapshot.guard})`
+        ).bind(activeIds),
+      ])
+    : []
   if (cleanup.some((result) => !result.success)) throw new Error('Notification cleanup failed')
   if (!monitors.length) return
   const suppressed = suppressedMonitors(config, now)

@@ -20,6 +20,13 @@ worker = os.environ.get('WORKER_NAME', 'uptimeflare-distributed')
 snapshot_namespace = worker + '-public-status'
 schema_hash = hashlib.sha256(Path('init.sql').read_bytes()).hexdigest()
 schema_state = Path('.deployment/schema-prepare.json')
+asset_routing = True
+try:
+    routing = json.loads(Path('out/_worker-routing.json').read_text())
+    if routing.get('sourceHash') == hashlib.sha256(Path('uptime.config.ts').read_bytes()).hexdigest() and routing.get('protected') is False:
+        asset_routing = ['/api/*']
+except (OSError, ValueError, TypeError):
+    pass  # Unverified/protected builds retain page authentication on every asset.
 for name in [database, worker]:
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,57}', name):
         raise SystemExit('Invalid deployment resource name')
@@ -83,7 +90,7 @@ if args.phase in ('prepare', 'reconcile'):
     Path('worker/wrangler.deploy.json').write_text(json.dumps({
         'name': worker, 'main': 'src/index.ts', 'account_id': account,
         'compatibility_date': '2025-04-02', 'compatibility_flags': ['nodejs_compat'],
-        'assets': {'directory': '../out', 'binding': 'ASSETS', 'run_worker_first': True, 'not_found_handling': '404-page'},
+        'assets': {'directory': '../out', 'binding': 'ASSETS', 'run_worker_first': asset_routing, 'not_found_handling': '404-page'},
         'd1_databases': [{'binding': 'UPTIMEFLARE_D1', 'database_name': database, 'database_id': database_id, 'migrations_dir': '../migrations'}],
         'kv_namespaces': [{'binding': 'UPTIMEFLARE_PUBLIC_KV', 'id': namespace['id']}],
         'durable_objects': {'bindings': [{'name': 'REMOTE_CHECKER_DO', 'class_name': 'RemoteChecker'}, {'name': 'COORDINATOR_DO', 'class_name': 'Coordinator'}]},

@@ -13,6 +13,7 @@ import { workerConfig } from '../../uptime.config'
 import { publishPublicDashboard } from './public-dashboard'
 import { runNotifications } from './notifications'
 import { cleanupPackedProbeResults } from './probe-retention'
+import { PublicChanges } from './public-change'
 
 export const COORDINATOR_PROTOCOL = 1
 export type ProbeCommitRequest = {
@@ -33,6 +34,29 @@ export type NativeCommitRequest = {
 export class Coordinator extends DurableObject<Env> {
   private queue = pLimit(1)
   private telemetryQueue = pLimit(2)
+  private publicChanges = new PublicChanges()
+  private publicRefreshPending = false
+  private nextPublicRefresh = 0
+  private queuePublicRefresh(parent?: string) {
+    const now = Math.floor(Date.now() / 1000)
+    if (
+      this.publicRefreshPending ||
+      now < this.nextPublicRefresh ||
+      !this.env.UPTIMEFLARE_PUBLIC_KV
+    )
+      return
+    this.publicRefreshPending = true
+    this.nextPublicRefresh = now + 60
+    this.ctx.waitUntil(
+      this.serial('materialize', parent, async (env) =>
+        publishPublicDashboard(env, await getRuntimeConfig(env, workerConfig), now, 'event')
+      )
+        .catch(() => console.error('Public event publication failed'))
+        .finally(() => {
+          this.publicRefreshPending = false
+        })
+    )
+  }
   async exportTelemetry(kind: 'metrics' | 'traces', body: string) {
     if (this.telemetryQueue.pendingCount >= 8) return false
     // Separate, bounded, best-effort network delivery; no D1, KV or DO storage.
@@ -81,7 +105,7 @@ export class Coordinator extends DurableObject<Env> {
       new TextEncoder().encode(JSON.stringify(request)).byteLength > 512 * 1024
     )
       throw new Error('Unsupported probe coordination request')
-    return this.serial('commitProbe', parent, async (env) => {
+    const committed = await this.serial('commitProbe', parent, async (env) => {
       await persistPackedBatch(
         env,
         request.probeId,
@@ -92,6 +116,9 @@ export class Coordinator extends DurableObject<Env> {
       )
       return { version: 1, runId: request.runId, committed: true }
     })
+    if (this.publicChanges.observe(request.probeId, request.results, Math.floor(Date.now() / 1000)))
+      this.queuePublicRefresh(parent)
+    return committed
   }
   async commitNative(
     request: NativeCommitRequest,
@@ -99,7 +126,7 @@ export class Coordinator extends DurableObject<Env> {
   ): Promise<{ version: number; committed: boolean; effects?: NativeEffect[] }> {
     if (request.version !== COORDINATOR_PROTOCOL || request.results.length > 200)
       throw new Error('Unsupported native coordination request')
-    return this.serial('commitNative', parent, async (env) => {
+    const result = await this.serial('commitNative', parent, async (env) => {
       const config = await getRuntimeConfig(env, workerConfig)
       if (
         ((config as typeof config & { revision?: number }).revision ?? 0) !== request.configRevision
@@ -109,6 +136,9 @@ export class Coordinator extends DurableObject<Env> {
       const committed = await commitNativeV2(env, config, request.claim, request.results, effects)
       return { version: 1, committed, effects }
     })
+    if (result.committed && result.effects?.some((effect) => effect.changed))
+      this.queuePublicRefresh(parent)
+    return result
   }
   async status(runId: string) {
     if (!/^[a-zA-Z0-9_.:-]{1,200}$/.test(runId)) throw new Error('Invalid run identity')
@@ -126,7 +156,14 @@ export class Coordinator extends DurableObject<Env> {
   }
   async evaluate(now: number, parent?: string) {
     return this.serial('evaluate', parent, async (env) =>
-      runNotifications(env, await getRuntimeConfig(env, workerConfig), now, undefined, false)
+      runNotifications(
+        env,
+        await getRuntimeConfig(env, workerConfig),
+        now,
+        undefined,
+        false,
+        Math.floor(now / 60) % 15 === 0
+      )
     )
   }
   async cleanup(now: number, parent?: string) {

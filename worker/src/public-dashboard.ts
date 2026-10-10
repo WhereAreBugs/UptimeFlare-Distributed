@@ -21,13 +21,26 @@ import { getRuntimeConfig } from './settings'
 import { getPublicNativeState } from './store'
 import { parseNativeDiagnostic } from './diagnostics'
 import { publicLink } from './privacy'
+import { resourceIdentity } from './resources'
+import {
+  isPublicationSlot,
+  publicationState,
+  reservePublication,
+  finishPublication,
+  PUBLICATION_HEARTBEAT,
+  PUBLICATION_LIMITS,
+} from './public-publication'
 
 export const PUBLIC_DASHBOARD_KEY = 'public-dashboard:v1'
 export const PUBLIC_CONFIGURATION_KEY = 'public-dashboard-config:v1'
 export { PUBLIC_SNAPSHOT_MAX_AGE_SECONDS } from '../../types/public-dashboard'
 const MAX_SNAPSHOT_BYTES = 256 * 1024
-const CACHE_URL = 'https://uptimeflare-public-cache.invalid/dashboard-v1'
+export const CACHE_URL = 'https://uptimeflare-public-cache.invalid/dashboard-v1'
 const RECOVERY_CACHE_URL = CACHE_URL + '/public-dashboard-recovery.json'
+const pendingBundles = new WeakMap<
+  object,
+  Promise<{ snapshot: PublicDashboardSnapshot | null; override: PublicDashboardSnapshot | null }>
+>()
 export type PublicDashboardEnv = ProbeEnv & {
   UPTIMEFLARE_PUBLIC_KV?: KVNamespace
   ASSETS?: Fetcher
@@ -525,19 +538,33 @@ export async function getPublicDashboard(
     /* A cache failure must not make a persisted snapshot unavailable. */
   }
   if (!bundle) {
-    const [snapshot, override] = await Promise.all([
-      env.UPTIMEFLARE_PUBLIC_KV.get(PUBLIC_DASHBOARD_KEY),
-      env.UPTIMEFLARE_PUBLIC_KV.get(PUBLIC_CONFIGURATION_KEY),
-    ])
-    bundle = { snapshot: parseSnapshot(snapshot), override: parseSnapshot(override) }
-    await cache
-      ?.put(
-        CACHE_URL,
-        new Response(JSON.stringify(bundle), {
-          headers: { 'Cache-Control': 'public, max-age=60', 'Content-Type': 'application/json' },
-        })
-      )
-      .catch(() => undefined)
+    const namespace = env.UPTIMEFLARE_PUBLIC_KV
+    const identity = resourceIdentity(namespace)
+    let pending = pendingBundles.get(identity)
+    if (!pending) {
+      pending = (async () => {
+        const [snapshot, override] = await Promise.all([
+          namespace.get(PUBLIC_DASHBOARD_KEY),
+          namespace.get(PUBLIC_CONFIGURATION_KEY),
+        ])
+        const value = { snapshot: parseSnapshot(snapshot), override: parseSnapshot(override) }
+        await cache
+          ?.put(
+            CACHE_URL,
+            new Response(JSON.stringify(value), {
+              headers: {
+                'Cache-Control': 'public, max-age=60',
+                'Content-Type': 'application/json',
+              },
+            })
+          )
+          .catch(() => undefined)
+        return value
+      })()
+      pendingBundles.set(identity, pending)
+      void pending.finally(() => pendingBundles.delete(identity)).catch(() => undefined)
+    }
+    bundle = await pending
   }
   const first = bundle.snapshot && sanitizePublicSnapshot(bundle.snapshot),
     second = bundle.override && sanitizePublicSnapshot(bundle.override)
@@ -546,29 +573,46 @@ export async function getPublicDashboard(
   if (!snapshot) throw new Error('Public dashboard snapshot is unavailable')
   return present(snapshot, 'kv', now)
 }
-/** Cron is the only normal measurement publisher: once every two minutes, at most 720 writes/day. */
+/** Default scheduled publication: 288 slots/day, skipping unchanged content until its heartbeat.
+ * Short-interval targets retain two-minute publication (720 slots/day).
+ * Events can publish earlier, but share a cross-isolate daily allowance and minute cooldown. */
 export async function publishPublicDashboard(
   env: PublicDashboardEnv,
   config: WorkerConfig,
-  scheduledTime: number
+  scheduledTime: number,
+  kind: 'scheduled' | 'event' = 'scheduled'
 ): Promise<boolean> {
-  if (!env.UPTIMEFLARE_PUBLIC_KV || Math.floor(scheduledTime / 60) % 2) return false
-  // Duplicate delivery cannot spend another KV write for the same two-minute slot.
-  const claimed = await env.UPTIMEFLARE_D1.prepare(
-    `INSERT INTO uptimeflare(key,value) VALUES('public_snapshot_slot',?)
-     ON CONFLICT(key) DO UPDATE SET value=excluded.value
-     WHERE CAST(uptimeflare.value AS INTEGER)<CAST(excluded.value AS INTEGER)`
+  if (
+    !env.UPTIMEFLARE_PUBLIC_KV ||
+    (kind === 'scheduled' && !isPublicationSlot(scheduledTime, config))
   )
-    .bind(String(scheduledTime))
-    .run()
-  if (!claimed.meta.changes) return false
+    return false
   const now = Math.floor(Date.now() / 1000)
+  const prior = await publicationState(env)
+  if (kind === 'scheduled' && (prior.slot ?? -1) >= scheduledTime) return false
+  if ((prior.attemptAt ?? 0) > now - 60) return false
+  if (prior.day === Math.floor(now / 86400) && (prior[kind] ?? 0) >= PUBLICATION_LIMITS[kind])
+    return false
   const [state, summaries] = await Promise.all([
     getPublicNativeState(env, config.monitors),
     getProbeDashboardSummaries(env, config.monitors, config.probes, now),
   ])
   const snapshot = buildPublicDashboard(config, now, true, summaries, state)
+  // Exclude the refresh timestamp, but retain samples, latency, cumulative totals,
+  // config revision, pause flags and time-derived offline changes in the fingerprint.
+  const bytes = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(serializeSnapshot({ ...snapshot, generatedAt: 0 }))
+  )
+  const digest = Array.from(new Uint8Array(bytes), (value) =>
+    value.toString(16).padStart(2, '0')
+  ).join('')
+  if (prior.digest === digest && now - (prior.publishedAt ?? 0) < PUBLICATION_HEARTBEAT)
+    return false
+  const nonce = await reservePublication(env, kind, scheduledTime, now)
+  if (!nonce) return false
   await env.UPTIMEFLARE_PUBLIC_KV.put(PUBLIC_DASHBOARD_KEY, serializeSnapshot(snapshot))
+  await finishPublication(env, nonce, digest, now)
   return true
 }
 /** Separate configuration override prevents an older in-flight Cron snapshot undoing a saved pause. */
@@ -601,6 +645,7 @@ export async function publishPublicConfiguration(
       { ...config, revision } as WorkerConfig,
       Math.floor(Date.now() / 1000)
     )
+    if (!(await reservePublication(env, 'configuration', 0, Math.floor(Date.now() / 1000)))) return
     await kv.put(PUBLIC_CONFIGURATION_KEY, serializeSnapshot(snapshot))
     await Promise.all(
       [CACHE_URL, CACHE_URL + '/wire-v2'].map(
@@ -626,7 +671,11 @@ export async function publicStateResponse(
   const cached = await cache?.match(url).catch(() => undefined)
   if (cached)
     return new Response(cached.body, {
-      headers: { ...Object.fromEntries(cached.headers), 'Cache-Control': 'no-store' },
+      headers: {
+        ...Object.fromEntries(cached.headers),
+        'cache-control': fallback.passwordProtection ? 'private,max-age=30' : 'public,max-age=30',
+        ...(fallback.passwordProtection && { vary: 'Authorization' }),
+      },
     })
   const dashboard = await getPublicDashboard(env, fallback),
     now = Math.floor(Date.now() / 1000)
@@ -653,12 +702,16 @@ export async function publicStateResponse(
   const response = new Response(body, {
     headers: {
       'Content-Type': 'application/json',
-      'Cache-Control': 'public,max-age=60',
+      'cache-control': 'public,max-age=60',
       'X-Content-Type-Options': 'nosniff',
     },
   })
   await cache?.put(url, response.clone()).catch(() => undefined)
   return new Response(body, {
-    headers: { ...Object.fromEntries(response.headers), 'Cache-Control': 'no-store' },
+    headers: {
+      ...Object.fromEntries(response.headers),
+      'cache-control': fallback.passwordProtection ? 'private,max-age=30' : 'public,max-age=30',
+      ...(fallback.passwordProtection && { vary: 'Authorization' }),
+    },
   })
 }
